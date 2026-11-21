@@ -15,6 +15,8 @@ The first transcription downloads the Whisper *large-v3-turbo* model (about 1.6 
 
 ## Phone recordings from Pocket Scribe
 
+The [Pocket Scribe Android source and build instructions](pocket-scribe/) are included in this repository.
+
 1. Connect Google Drive once in Pocket Scribe on your phone. On the PC, sign into the same account in Google Drive for desktop.
 2. Stop and save a recording on the phone. Pocket Scribe uploads the finished MP4 or M4A and its recording details automatically.
 3. In KT Scribe, open **Phone recordings**. The inbox looks for the **Pocket Scribe** folder in **My Drive**. You can also click **Drive folder** and paste its path from File Explorer, for example G:\My Drive\Pocket Scribe. The earlier **VoiceCam** folder is also supported.
