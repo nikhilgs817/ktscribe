@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KT Scribe</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c8cff'/%3E%3Cpath d='M9 11h14M9 16h10M9 21h7' stroke='white' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v=pocket-scribe">
 </head>
 <body>
 <div class="app">
@@ -16,6 +16,7 @@
       <div><div class="brand-name">KT Scribe</div><div class="brand-sub">Local · Private</div></div>
     </div>
     <button class="btn primary block" id="newBtn"><span class="i">＋</span> New session</button>
+    <button class="btn block" id="phoneInboxBtn">Phone recordings <span class="pill" id="phoneInboxCount" hidden></span></button>
     <div class="side-search"><input id="sessionFilter" placeholder="Search sessions…"></div>
     <div class="session-list" id="sessionList"></div>
     <div class="side-foot">
@@ -262,12 +263,32 @@
   </div>
 </div>
 
+<dialog id="phoneInbox" class="modal-card wide phone-inbox" aria-labelledby="phoneInboxTitle">
+  <div class="modal-h"><h3 id="phoneInboxTitle">Phone recordings</h3><button class="icon-btn" id="closePhoneInbox" aria-label="Close phone recordings">✕</button></div>
+  <div class="phone-inbox-toolbar">
+    <p class="small muted" id="phoneFolderStatus"></p>
+    <button class="btn small" id="refreshPhoneInbox">Refresh</button>
+    <button class="btn small" id="editPhoneFolder" aria-controls="phoneFolderForm" aria-expanded="false">Drive folder</button>
+  </div>
+  <form id="phoneFolderForm" class="phone-folder-form" hidden>
+    <label for="phoneFolder">Google Drive folder on this PC</label>
+    <p class="small muted">Paste the Pocket Scribe folder path from File Explorer. Leave it blank to find the folder automatically.</p>
+    <div class="phone-folder-input">
+      <input id="phoneFolder" type="text" placeholder="G:\My Drive\Pocket Scribe" spellcheck="false" autocomplete="off">
+      <button class="btn primary" type="submit">Save folder</button>
+    </div>
+  </form>
+  <p class="small err" id="phoneInboxError" role="alert" hidden></p>
+  <div class="phone-recordings" id="phoneRecordingList"></div>
+</dialog>
+
+
 <!-- ============ Lightbox ============ -->
 <div class="lightbox" id="lightbox" hidden><img id="lightImg" alt=""><div id="lightCap"></div></div>
 
 <div class="toasts" id="toasts"></div>
 
 <script src="/static/vendor/marked.min.js"></script>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=pocket-scribe"></script>
 </body>
 </html>

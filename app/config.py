@@ -61,6 +61,7 @@ DEFAULTS = {
     "frame_sensitivity": "medium",   # low | medium | high
     "describe_frames": True,
     "max_frames": 150,
+    "phone_recordings_folder": "",
     "runbook_template": DEFAULT_RUNBOOK_TEMPLATE,
 }
 

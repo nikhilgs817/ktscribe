@@ -40,7 +40,8 @@ def _write(path: Path, data):
     tmp.replace(path)
 
 
-def create(title: str, video_path: str, options: dict, copied: bool) -> dict:
+def create(title: str, video_path: str, options: dict, copied: bool, *,
+           staged_source: tuple[Path, str] | None = None, phone_recording_id: str | None = None) -> dict:
     sid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
     d = sdir(sid)
     (d / "frames").mkdir(parents=True, exist_ok=True)
@@ -60,7 +61,18 @@ def create(title: str, video_path: str, options: dict, copied: bool) -> dict:
         "options": options,
         "runbook": {"state": "none", "chars": 0, "error": None, "updated": None},
     }
-    _write(d / "meta.json", meta)
+    try:
+        if staged_source is not None:
+            staged, extension = staged_source
+            dest = d / f"source{extension}"
+            staged.replace(dest)
+            meta["video_path"] = str(dest.resolve())
+        if phone_recording_id is not None:
+            meta.update(phone_recording_id=phone_recording_id, title_auto=False)
+        _write(d / "meta.json", meta)
+    except OSError:
+        shutil.rmtree(d, ignore_errors=True)
+        raise
     return meta
 
 

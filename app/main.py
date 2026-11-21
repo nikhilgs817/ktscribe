@@ -2,6 +2,7 @@
 import json
 import re
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, exporters, llm, media, pipeline, prompts, store
+from . import config, exporters, llm, media, phone_inbox, pipeline, prompts, store
 
 STATIC = config.ROOT / "static"
 VIDEO_EXT = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg", ".ts",
@@ -67,7 +68,6 @@ def health():
 def quit_app():
     """Stop the server (used by the Quit button when KT Scribe runs without a console window)."""
     import os
-    import threading
     threading.Timer(0.5, lambda: os._exit(0)).start()
     return {"ok": True}
 
@@ -102,6 +102,82 @@ def _options(raw) -> dict:
     o = raw if isinstance(raw, dict) else json.loads(raw or "{}")
     keep = ("language", "vocabulary", "frame_sensitivity", "describe_frames")
     return {k: o[k] for k in keep if k in o}
+
+
+
+_phone_import_lock = threading.Lock()
+
+
+@app.get("/api/phone-recordings")
+def list_phone_recordings():
+    directory = phone_inbox.folder()
+    result = {"folder": str(directory) if directory else "", "folderAvailable": False, "recordings": []}
+    if directory is None:
+        return result
+    try:
+        recordings = phone_inbox.scan(directory)
+    except OSError:
+        return result
+    sessions_by_recording = {s.get("phone_recording_id"): s for s in store.list_all()}
+    result["folderAvailable"] = True
+    for rec in sorted(recordings.values(), key=lambda row: row.started_at, reverse=True):
+        session = sessions_by_recording.get(rec.id)
+        result["recordings"].append({
+            "id": rec.id, "title": rec.title, "mode": rec.mode, "startedAt": rec.started_at,
+            "durationMs": rec.duration_ms,
+            "state": session["status"] if session else "available" if rec.available() else "syncing",
+            "sessionId": session["id"] if session else None,
+        })
+    return result
+
+
+@app.put("/api/phone-recordings/folder")
+def set_phone_folder(body: dict = Body(...)):
+    value = body.get("folder")
+    if not isinstance(value, str):
+        raise HTTPException(400, "Enter the recording folder path.")
+    value = value.strip().strip('"')
+    if value:
+        try:
+            path = Path(value).expanduser()
+            if not path.is_absolute() or not path.is_dir():
+                raise ValueError()
+            value = str(path.resolve(strict=True))
+        except (OSError, ValueError, RuntimeError):
+            raise HTTPException(400, "Folder not found. Use the full path from File Explorer.") from None
+    config.save({"phone_recordings_folder": value})
+    return {"folder": value}
+
+
+@app.post("/api/phone-recordings/{recording_id}/process")
+def process_phone_recording(recording_id: str, body: dict = Body(...)):
+    with _phone_import_lock:
+        for session in store.list_all():
+            if session.get("phone_recording_id") == recording_id:
+                return session
+        directory = phone_inbox.folder()
+        try:
+            rec = phone_inbox.scan(directory).get(recording_id) if directory else None
+        except OSError:
+            rec = None
+        if rec is None:
+            raise HTTPException(404, "Recording unavailable. Check that Google Drive is connected.")
+        try:
+            staged = phone_inbox.stage(rec)
+        except phone_inbox.RecordingNotReady as exc:
+            raise HTTPException(409, str(exc)) from None
+        except OSError:
+            raise HTTPException(409, "Could not copy the recording. Check Drive sync and free disk space.") from None
+        try:
+            meta = store.create(rec.title, "", {}, copied=True, staged_source=(staged, rec.media.suffix),
+                                phone_recording_id=rec.id)
+        except OSError:
+            raise HTTPException(500, "Could not save the recording in KT Scribe. Check free disk space.") from None
+        finally:
+            staged.unlink(missing_ok=True)
+        pipeline.enqueue("process", meta["id"])
+        return meta
+
 
 
 @app.get("/api/sessions")

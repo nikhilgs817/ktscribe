@@ -802,3 +802,158 @@ window.addEventListener("beforeunload", (e) => { if (S.rbDirty) { saveRunbook();
   poll();
   setInterval(checkHealth, 30000);
 })();
+
+const phoneInbox = $("#phoneInbox");
+let phoneInboxData = null;
+let phoneInboxRequest = null;
+let phoneProcessing = null;
+const phoneStates = {
+  available: "Ready to process", syncing: "Waiting for Drive sync", queued: "Queued",
+  running: "Processing", ready: "Processed", error: "Needs attention", cancelled: "Processing stopped",
+};
+
+function phoneError(message = "") {
+  $("#phoneInboxError").textContent = message;
+  $("#phoneInboxError").hidden = !message;
+}
+
+function renderPhoneInbox() {
+  const inbox = phoneInboxData;
+  const unread = inbox?.recordings.filter((r) => r.state === "available").length || 0;
+  $("#phoneInboxCount").textContent = unread;
+  $("#phoneInboxCount").hidden = !unread;
+  if (!phoneInbox.open) return;
+
+  const folderStatus = $("#phoneFolderStatus");
+  const list = $("#phoneRecordingList");
+  const focused = list.contains(document.activeElement) ? document.activeElement.dataset.recording : null;
+  list.replaceChildren();
+  folderStatus.textContent = inbox?.folderAvailable ? inbox.folder
+    : inbox?.folder ? "Drive folder unavailable" : "Connect Google Drive";
+  if (!inbox?.recordings.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = inbox?.folderAvailable
+      ? "No phone recordings yet. Save a recording in Pocket Scribe and it will appear here after Drive sync."
+      : inbox ? "Open Google Drive for desktop on this PC, or choose the Pocket Scribe folder." : "Checking for recordings…";
+    list.append(empty);
+    return;
+  }
+
+  for (const rec of inbox.recordings) {
+    const row = document.createElement("div");
+    const info = document.createElement("div");
+    const title = document.createElement("strong");
+    const details = document.createElement("p");
+    const date = new Date(rec.startedAt);
+    const parts = [rec.mode === "audio_only" ? "Audio" : "Audio + video"];
+    if (Number.isFinite(date.getTime())) parts.unshift(date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }));
+    if (rec.durationMs > 0) parts.push(ts(rec.durationMs / 1000));
+    parts.push(phoneStates[rec.state] || "Imported");
+    row.className = "phone-recording";
+    info.className = "phone-recording-info";
+    title.textContent = rec.title;
+    details.className = "small muted";
+    details.textContent = parts.join(" · ");
+    info.append(title, details);
+    row.append(info);
+    if (rec.sessionId || rec.state === "available") {
+      const button = document.createElement("button");
+      button.className = rec.sessionId ? "btn" : "btn primary";
+      button.dataset.recording = rec.id;
+      button.textContent = rec.sessionId ? "Open session" : phoneProcessing === rec.id ? "Importing…" : "Process";
+      button.disabled = !rec.sessionId && phoneProcessing !== null;
+      button.setAttribute("aria-label", button.textContent + " " + rec.title);
+      button.onclick = () => openPhoneRecording(rec);
+      row.append(button);
+    }
+    list.append(row);
+  }
+  if (focused) list.querySelector('[data-recording="' + focused + '"]')?.focus({ preventScroll: true });
+}
+
+async function refreshPhoneInbox() {
+  if (phoneInboxRequest) return phoneInboxRequest;
+  phoneInboxRequest = (async () => {
+    try {
+      const next = await api("/api/phone-recordings");
+      if (JSON.stringify(next) !== JSON.stringify(phoneInboxData)) {
+        phoneInboxData = next;
+        renderPhoneInbox();
+      }
+    } catch (e) {
+      if (phoneInbox.open) phoneError(e.message);
+    } finally {
+      phoneInboxRequest = null;
+    }
+  })();
+  return phoneInboxRequest;
+}
+
+async function openPhoneRecording(rec) {
+  phoneError();
+  try {
+    let id = rec.sessionId;
+    if (!id) {
+      if (phoneProcessing) return;
+      phoneProcessing = rec.id;
+      renderPhoneInbox();
+      const session = await api("/api/phone-recordings/" + rec.id + "/process", { method: "POST", body: {} });
+      id = session.id;
+      await loadSessions();
+    }
+    phoneInbox.close();
+    await openSession(id, "transcript");
+    poll();
+  } catch (e) {
+    phoneError(e.message);
+  } finally {
+    if (phoneProcessing === rec.id) {
+      phoneProcessing = null;
+      renderPhoneInbox();
+      await refreshPhoneInbox();
+    }
+  }
+}
+
+$("#phoneInboxBtn").onclick = () => {
+  phoneError();
+  phoneInbox.showModal();
+  renderPhoneInbox();
+  refreshPhoneInbox();
+};
+$("#closePhoneInbox").onclick = () => phoneInbox.close();
+$("#refreshPhoneInbox").onclick = () => {
+  phoneError();
+  refreshPhoneInbox();
+};
+$("#editPhoneFolder").onclick = () => {
+  const form = $("#phoneFolderForm");
+  form.hidden = !form.hidden;
+  $("#editPhoneFolder").setAttribute("aria-expanded", String(!form.hidden));
+  if (!form.hidden) {
+    $("#phoneFolder").value = phoneInboxData?.folder || "";
+    $("#phoneFolder").focus();
+  }
+};
+$("#phoneFolderForm").onsubmit = async (event) => {
+  event.preventDefault();
+  phoneError();
+  const button = event.submitter;
+  button.disabled = true;
+  try {
+    await api("/api/phone-recordings/folder", { method: "PUT", body: { folder: $("#phoneFolder").value } });
+    $("#phoneFolderForm").hidden = true;
+    $("#editPhoneFolder").setAttribute("aria-expanded", "false");
+    $("#editPhoneFolder").focus();
+    await phoneInboxRequest;
+    await refreshPhoneInbox();
+  } catch (e) {
+    phoneError(e.message);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+refreshPhoneInbox();
+setInterval(refreshPhoneInbox, 20000);

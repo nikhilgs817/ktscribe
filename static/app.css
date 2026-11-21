@@ -342,3 +342,25 @@ mark.cur { background: rgba(227,179,65,.75); color: #000; }
   .steps { grid-template-columns: 1fr 1fr; }
   .stat-row, .ov-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* Pocket Scribe inbox */
+#phoneInboxBtn { margin-top: 8px; }
+#phoneInboxCount { margin-left: auto; }
+.phone-inbox { margin: auto; color: var(--text); width: min(720px, calc(100% - 32px)); overflow: hidden; }
+.phone-inbox:not([open]) { display: none; }
+.phone-inbox::backdrop { background: rgba(4, 6, 10, .7); backdrop-filter: blur(3px); }
+.phone-inbox-toolbar, .phone-folder-input, .phone-recording { display: flex; gap: 10px; align-items: center; }
+.phone-inbox-toolbar p { flex: 1; margin: 0; overflow-wrap: anywhere; }
+.phone-folder-form { border: 1px solid var(--line-2); border-radius: 8px; padding: 12px; margin-top: 12px; }
+.phone-folder-form p { margin: 4px 0 8px; }
+.phone-folder-input input { flex: 1; min-width: 0; }
+.phone-recordings { min-height: 120px; overflow-y: auto; margin-top: 12px; }
+.phone-recording { border-top: 1px solid var(--line); justify-content: space-between; padding: 12px 0; }
+.phone-recording-info { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.phone-recording-info p { margin: 3px 0 0; }
+.phone-recording .btn { flex: none; }
+@media (max-width: 540px) {
+  .phone-inbox-toolbar { flex-wrap: wrap; }
+  .phone-inbox-toolbar p { flex: 1 1 100%; }
+  .phone-recording { flex-wrap: wrap; }
+}
