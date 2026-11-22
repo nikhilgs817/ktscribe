@@ -1,8 +1,8 @@
 @echo off
-rem Fallback launcher with a visible console (shows logs). The desktop shortcut uses "KT Scribe.exe" instead.
+rem Fallback launcher with a visible console (shows logs). The desktop shortcut uses "Pocket Scribe Desktop.exe" instead.
 cd /d "%~dp0"
 if not exist ".venv\Scripts\python.exe" (
-  echo Run "Setup KT Scribe.bat" first.
+  echo Run "Setup Pocket Scribe Desktop.bat" first.
   pause
   exit /b 1
 )

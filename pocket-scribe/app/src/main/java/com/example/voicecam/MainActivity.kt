@@ -182,9 +182,9 @@ class MainActivity : ComponentActivity() {
         recordingState.setTextColor(if (active) SimpleUi.RED else SimpleUi.MUTED)
         val connected = !prefs.getString("account", "").isNullOrBlank()
         backup.show(when {
-            !connected -> "Connect Drive to send recordings to KT Scribe"
+            !connected -> "Connect Drive to send recordings to Pocket Scribe Desktop"
             prefs.getString("backupState", "") == "attention" -> "Drive sync needs attention"
-            finalSyncState == "uploaded" -> "Uploaded to Drive · Open KT Scribe on your PC"
+            finalSyncState == "uploaded" -> "Uploaded to Drive · Open Pocket Scribe Desktop on your PC"
             finalSyncState == "ready" -> "Saved on phone · Waiting for Drive sync"
             else -> "Finished recordings sync automatically"
         })
@@ -269,8 +269,8 @@ class MainActivity : ComponentActivity() {
         val dialog = AlertDialog.Builder(this).setTitle("Name recording").setView(input)
             .setMessage(when {
                 session.optString("state") == "save_failed" -> session.optString("saveError")
-                prefs.getString("account", "").isNullOrBlank() -> "Connect Google Drive to send this recording to KT Scribe."
-                else -> "Saved recordings sync to KT Scribe through Google Drive."
+                prefs.getString("account", "").isNullOrBlank() -> "Connect Google Drive to send this recording to Pocket Scribe Desktop."
+                else -> "Saved recordings sync to Pocket Scribe Desktop through Google Drive."
             })
             .setPositiveButton("Save", null).setNegativeButton("Later") { _, _ -> namingSession = "" }
             .setCancelable(false).create()

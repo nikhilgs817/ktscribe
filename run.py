@@ -1,4 +1,4 @@
-"""Start KT Scribe and open it in the browser."""
+"""Start Pocket Scribe Desktop and open it in the browser."""
 import os
 import sys
 import threading
@@ -15,5 +15,5 @@ if __name__ == "__main__":
     if "--no-browser" not in sys.argv:
         threading.Thread(target=lambda: (time.sleep(1.5), webbrowser.open(f"http://{HOST}:{PORT}")),
                          daemon=True).start()
-    print(f"\n  KT Scribe running at http://{HOST}:{PORT}  (close this window to stop)\n")
+    print(f"\n  Pocket Scribe Desktop running at http://{HOST}:{PORT}  (close this window to stop)\n")
     uvicorn.run("app.main:app", host=HOST, port=PORT, log_level="warning")

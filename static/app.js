@@ -1,4 +1,4 @@
-/* KT Scribe front-end — vanilla JS, no build step. */
+/* Pocket Scribe Desktop front-end — vanilla JS, no build step. */
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -774,11 +774,11 @@ $$("[data-test]").forEach((b) => (b.onclick = async () => {
 
 $("#quitBtn").onclick = async () => {
   const busy = S.sessions.some((x) => isBusy(x) || rbBusy(x));
-  if (!confirm(busy ? "A job is still running. Quit anyway? (You can resume it next time.)" : "Quit KT Scribe? This stops the background server.")) return;
+  if (!confirm(busy ? "A job is still running. Quit anyway? (You can resume it next time.)" : "Quit Pocket Scribe Desktop? This stops the background server.")) return;
   if (S.rbDirty) await saveRunbook();
   clearTimeout(pollTimer);
   await fetch("/api/quit", { method: "POST" }).catch(() => {});
-  document.body.innerHTML = `<div style="height:100vh;display:grid;place-items:center;text-align:center;color:#b8c0d0;font:15px system-ui"><div><h2 style="color:#e7eaf1">KT Scribe has stopped</h2>You can close this tab. Open KT Scribe from the desktop shortcut to start it again.</div></div>`;
+  document.body.innerHTML = `<div style="height:100vh;display:grid;place-items:center;text-align:center;color:#b8c0d0;font:15px system-ui"><div><h2 style="color:#e7eaf1">Pocket Scribe Desktop has stopped</h2>You can close this tab. Open Pocket Scribe Desktop from the desktop shortcut to start it again.</div></div>`;
 };
 
 // ------------------------------------------------------------------ modals & keys

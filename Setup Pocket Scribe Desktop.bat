@@ -1,14 +1,14 @@
 @echo off
 setlocal EnableExtensions
 chcp 65001 >nul
-title KT Scribe - setup
+title Pocket Scribe Desktop - setup
 cd /d "%~dp0"
 set "ROOT=%~dp0"
 set "STATUS=%ROOT%setup_status.txt"
 echo STARTED %DATE% %TIME%> "%STATUS%"
 
 echo.
-echo   KT Scribe setup  (first run takes 5-10 minutes, needs internet)
+echo   Pocket Scribe Desktop setup  (first run takes 5-10 minutes, needs internet)
 echo   ----------------------------------------------------------------
 
 rem ---------- 1. Python 3.11 / 3.12 / 3.13 (faster-whisper has no wheels for 3.14 yet)
@@ -43,22 +43,21 @@ echo STEP packages>> "%STATUS%"
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt pyinstaller
 if errorlevel 1 goto fail
 
-rem ---------- 3. build "KT Scribe.exe" (small launcher; the app itself stays in this folder)
+rem ---------- 3. build "Pocket Scribe Desktop.exe" (small launcher; the app itself stays in this folder)
 echo STEP build-exe>> "%STATUS%"
-".venv\Scripts\python.exe" -m PyInstaller --noconfirm --onefile --noconsole --name "KT Scribe" --icon "%ROOT%ktscribe.ico" --distpath "%ROOT%." --workpath "%ROOT%build" --specpath "%ROOT%build" "%ROOT%launcher.py"
+".venv\Scripts\python.exe" -m PyInstaller --noconfirm --onefile --noconsole --name "Pocket Scribe Desktop" --icon "%ROOT%pocket-scribe.ico" --distpath "%ROOT%." --workpath "%ROOT%build" --specpath "%ROOT%build" "%ROOT%launcher.py"
 if errorlevel 1 goto fail
-if not exist "%ROOT%KT Scribe.exe" goto fail
+if not exist "%ROOT%Pocket Scribe Desktop.exe" goto fail
 
 rem ---------- 4. Desktop + Start menu shortcuts
 echo STEP shortcuts>> "%STATUS%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$w=New-Object -ComObject WScript.Shell; foreach($d in @([Environment]::GetFolderPath('Desktop'),[Environment]::GetFolderPath('Programs'))){ $s=$w.CreateShortcut((Join-Path $d 'KT Scribe.lnk')); $s.TargetPath='%ROOT%KT Scribe.exe'; $s.WorkingDirectory='%ROOT%'; $s.IconLocation='%ROOT%ktscribe.ico'; $s.Description='KT Scribe - turn KT recordings into transcripts and runbooks'; $s.Save() }"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\install-shortcuts.ps1"
 if errorlevel 1 goto fail
 
-rem ---------- 5. tidy
-rmdir /s /q "%ROOT%build" >nul 2>&1
+rem ---------- 5. finish
 echo DONE>> "%STATUS%"
 echo.
-echo   Done!  Use the "KT Scribe" icon on your Desktop.
+echo   Done!  Use the "Pocket Scribe Desktop" icon on your Desktop.
 echo   (This window closes in 8 seconds.)
 timeout /t 8 >nul
 exit /b 0

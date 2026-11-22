@@ -1,15 +1,17 @@
-# KT Scribe
+# Pocket Scribe Desktop
 
 Turn a recorded knowledge-transfer (KT) call into a **timestamped transcript**, an **editable runbook with screenshots**, and a **Q&A chat**, all running locally on your PC.
+
+[Read the full user guide](docs/user-guide.md) for setup, recording, processing, exporting, and troubleshooting.
 
 ## Quick start (Windows)
 
 1. Make sure **Ollama** is running with your models (`ollama list`).
-2. Double-click **`Setup KT Scribe.bat`** once (5–10 minutes, needs internet). It installs Python 3.12 if needed, creates the environment, builds **`KT Scribe.exe`** and puts a **KT Scribe** shortcut on your Desktop and Start menu.
+2. Double-click **`Setup Pocket Scribe Desktop.bat`** once (5–10 minutes, needs internet). It installs Python 3.12 if needed, creates the environment, builds **`Pocket Scribe Desktop.exe`** and puts a **Pocket Scribe Desktop** shortcut on your Desktop and Start menu.
 3. From then on, just use the Desktop icon. It starts the server in the background (no console window) and opens **http://127.0.0.1:8765**. The ⏻ button at the bottom-left of the app stops the server.
 4. Click **New session** and drop in a video, or choose **Use file on this PC** and paste the path (avoids copying multi-GB recordings).
 
-`KT Scribe.exe` is a small launcher. The app and its Python environment stay in this folder, so **don't move or delete the folder** (if you move it, run the setup file again). `start.bat` is a fallback that shows a console with logs. Server logs are in `data\server.log`.
+`Pocket Scribe Desktop.exe` is a small launcher. The app and its Python environment stay in this folder, so **don't move or delete the folder** (if you move it, run the setup file again). `start.bat` is a fallback that shows a console with logs. Server logs are in `data\server.log`.
 
 The first transcription downloads the Whisper *large-v3-turbo* model (about 1.6 GB, one time only) into `data\models`. Windows SmartScreen may warn about the unsigned exe the first time: choose *More info → Run anyway*.
 
@@ -19,10 +21,10 @@ The [Pocket Scribe Android source and build instructions](pocket-scribe/) are in
 
 1. Connect Google Drive once in Pocket Scribe on your phone. On the PC, sign into the same account in Google Drive for desktop.
 2. Stop and save a recording on the phone. Pocket Scribe uploads the finished MP4 or M4A and its recording details automatically.
-3. In KT Scribe, open **Phone recordings**. The inbox looks for the **Pocket Scribe** folder in **My Drive**. You can also click **Drive folder** and paste its path from File Explorer, for example G:\My Drive\Pocket Scribe. The earlier **VoiceCam** folder is also supported.
-4. Click **Process**. KT Scribe verifies the complete file, copies it to the local session, and starts its transcript and summary workflow. You can generate a runbook from the resulting session.
+3. In Pocket Scribe Desktop, open **Phone recordings**. The inbox looks for the **Pocket Scribe** folder in **My Drive**. You can also click **Drive folder** and paste its path from File Explorer, for example G:\My Drive\Pocket Scribe. The earlier **VoiceCam** folder is also supported.
+4. Click **Process**. Pocket Scribe Desktop verifies the complete file, copies it to the local session, and starts its transcript and summary workflow. You can generate a runbook from the resulting session.
 
-The inbox refreshes while KT Scribe is open and shows the recording's name, date, duration and mode. Live backup parts are kept separately in Drive.
+The inbox refreshes while Pocket Scribe Desktop is open and shows the recording's name, date, duration and mode. Live backup parts are kept separately in Drive.
 
 ## What each model does
 

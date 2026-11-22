@@ -1,7 +1,7 @@
-"""KT Scribe launcher — becomes "KT Scribe.exe" (built by Setup KT Scribe.bat with PyInstaller).
+"""Pocket Scribe Desktop launcher — becomes "Pocket Scribe Desktop.exe" (built by Setup Pocket Scribe Desktop.bat with PyInstaller).
 
 Starts the local server in the background (no console window) if it isn't running, then opens the browser.
-The exe must stay in the ktscribe folder, next to run.py and .venv.
+The exe must stay in the application folder, next to run.py and .venv.
 """
 import os
 import socket
@@ -29,7 +29,7 @@ def is_up() -> bool:
 def alert(text: str):
     if os.name == "nt":
         import ctypes
-        ctypes.windll.user32.MessageBoxW(0, text, "KT Scribe", 0x10)
+        ctypes.windll.user32.MessageBoxW(0, text, "Pocket Scribe Desktop", 0x10)
     else:
         print(text)
 
@@ -48,7 +48,7 @@ def main():
     if not is_up():
         py = venv_python(root)
         if not py or not os.path.exists(os.path.join(root, "run.py")):
-            alert("KT Scribe isn't set up in this folder yet.\n\nRun “Setup KT Scribe.bat” in:\n" + root)
+            alert("Pocket Scribe Desktop isn't set up in this folder yet.\n\nRun “Setup Pocket Scribe Desktop.bat” in:\n" + root)
             return
         os.makedirs(os.path.join(root, "data"), exist_ok=True)
         log = open(os.path.join(root, "data", "server.log"), "ab")
@@ -60,7 +60,7 @@ def main():
                 break
             time.sleep(0.5)
         else:
-            alert("KT Scribe didn't start within a minute.\n\nDetails are in:\n" + os.path.join(root, "data", "server.log"))
+            alert("Pocket Scribe Desktop didn't start within a minute.\n\nDetails are in:\n" + os.path.join(root, "data", "server.log"))
             return
     webbrowser.open(URL)
 

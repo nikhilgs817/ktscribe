@@ -1,4 +1,4 @@
-"""KT Scribe — local web app. Run with:  python run.py"""
+"""Pocket Scribe Desktop — local web app. Run with:  python run.py"""
 import json
 import re
 import shutil
@@ -16,7 +16,7 @@ STATIC = config.ROOT / "static"
 VIDEO_EXT = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg", ".ts",
              ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma"}
 
-app = FastAPI(title="KT Scribe")
+app = FastAPI(title="Pocket Scribe Desktop")
 
 
 @app.on_event("startup")
@@ -66,7 +66,7 @@ def health():
 
 @app.post("/api/quit")
 def quit_app():
-    """Stop the server (used by the Quit button when KT Scribe runs without a console window)."""
+    """Stop the server (used by the Quit button when Pocket Scribe Desktop runs without a console window)."""
     import os
     threading.Timer(0.5, lambda: os._exit(0)).start()
     return {"ok": True}
@@ -172,7 +172,7 @@ def process_phone_recording(recording_id: str, body: dict = Body(...)):
             meta = store.create(rec.title, "", {}, copied=True, staged_source=(staged, rec.media.suffix),
                                 phone_recording_id=rec.id)
         except OSError:
-            raise HTTPException(500, "Could not save the recording in KT Scribe. Check free disk space.") from None
+            raise HTTPException(500, "Could not save the recording in Pocket Scribe Desktop. Check free disk space.") from None
         finally:
             staged.unlink(missing_ok=True)
         pipeline.enqueue("process", meta["id"])

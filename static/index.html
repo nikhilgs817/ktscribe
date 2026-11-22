@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KT Scribe</title>
+<title>Pocket Scribe Desktop</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c8cff'/%3E%3Cpath d='M9 11h14M9 16h10M9 21h7' stroke='white' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/app.css?v=pocket-scribe">
 </head>
@@ -13,7 +13,7 @@
   <aside class="sidebar">
     <div class="brand">
       <div class="logo"><svg viewBox="0 0 32 32"><path d="M9 11h14M9 16h10M9 21h7"/></svg></div>
-      <div><div class="brand-name">KT Scribe</div><div class="brand-sub">Local · Private</div></div>
+      <div><div class="brand-name">Pocket Scribe Desktop</div><div class="brand-sub">Local · Private</div></div>
     </div>
     <button class="btn primary block" id="newBtn"><span class="i">＋</span> New session</button>
     <button class="btn block" id="phoneInboxBtn">Phone recordings <span class="pill" id="phoneInboxCount" hidden></span></button>
@@ -22,7 +22,7 @@
     <div class="side-foot">
       <div class="sys" id="sysStatus"><span class="dot"></span><span>Checking…</span></div>
       <button class="icon-btn" id="settingsBtn" title="Settings">⚙</button>
-      <button class="icon-btn danger" id="quitBtn" title="Quit KT Scribe (stops the background server)">⏻</button>
+      <button class="icon-btn danger" id="quitBtn" title="Quit Pocket Scribe Desktop (stops the background server)">⏻</button>
     </div>
   </aside>
 
@@ -182,7 +182,7 @@
       <div class="drop" id="drop">
         <div class="drop-icon">⬆</div>
         <div id="dropLabel"><b>Drop a recording here</b> or <a href="#" id="browse">browse</a></div>
-        <div class="muted small">The file is copied into KT Scribe's library.</div>
+        <div class="muted small">The file is copied into Pocket Scribe Desktop's library.</div>
       </div>
       <input type="file" id="fileInput" accept="video/*,audio/*,.mkv" hidden>
     </div>
@@ -289,6 +289,6 @@
 <div class="toasts" id="toasts"></div>
 
 <script src="/static/vendor/marked.min.js"></script>
-<script src="/static/app.js?v=pocket-scribe"></script>
+<script src="/static/app.js?v=pocket-scribe-desktop"></script>
 </body>
 </html>

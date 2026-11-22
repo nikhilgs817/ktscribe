@@ -61,7 +61,7 @@ class SettingsActivity : ComponentActivity() {
         space(12)
         text("Google Drive", 20f, true)
         account = text("")
-        text("Finished recordings sync to Google Drive automatically. Open Phone recordings in KT Scribe on your PC to process them.")
+        text("Finished recordings sync to Google Drive automatically. Open Phone recordings in Pocket Scribe Desktop on your PC to process them.")
         connect = SimpleUi.primaryButton(this, "Connect Google Drive") {
             accountCandidate = prefs.getString("account", "").orEmpty()
             if (accountCandidate.isNotBlank()) authorize()
