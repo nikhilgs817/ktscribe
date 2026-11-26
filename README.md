@@ -1,78 +1,109 @@
-# Pocket Scribe Desktop
+<p align="center">
+  <img src="static/icon.svg" width="84" alt="Pocket Scribe icon">
+</p>
 
-Turn a recorded knowledge-transfer (KT) call into a **timestamped transcript**, an **editable runbook with screenshots**, and a **Q&A chat**, all running locally on your PC.
+<h1 align="center">Pocket Scribe</h1>
 
-[Read the full user guide](docs/user-guide.md) for setup, recording, processing, exporting, and troubleshooting.
+<p align="center">
+  Record a KT call or meeting on an old Android phone.<br>
+  Get the transcript, screenshots, KT document, meeting invite and a bundle for Claude on your Windows PC, with your own local models.
+</p>
 
-## Quick start (Windows)
+<p align="center">
+  <a href="docs/INSTALL.md"><b>Install</b></a> ·
+  <a href="docs/user-guide.md"><b>User guide</b></a> ·
+  <a href="docs/COWORK-INSTALL-PROMPT.md"><b>Install with Claude Cowork</b></a> ·
+  <a href="CHANGELOG.md"><b>What's new</b></a>
+</p>
 
-1. Make sure **Ollama** is running with your models (`ollama list`).
-2. Double-click **`Setup Pocket Scribe Desktop.bat`** once (5–10 minutes, needs internet). It installs Python 3.12 if needed, creates the environment, builds **`Pocket Scribe Desktop.exe`** and puts a **Pocket Scribe Desktop** shortcut on your Desktop and Start menu.
-3. From then on, just use the Desktop icon. It starts the server in the background (no console window) and opens **http://127.0.0.1:8765**. The ⏻ button at the bottom-left of the app stops the server.
-4. Click **New session** and drop in a video, or choose **Use file on this PC** and paste the path (avoids copying multi-GB recordings).
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-dark.png">
+  <img src="docs/images/main-light.png" alt="Pocket Scribe Desktop main page with three sessions and the phone strip">
+</picture>
 
-`Pocket Scribe Desktop.exe` is a small launcher. The app and its Python environment stay in this folder, so **don't move or delete the folder** (if you move it, run the setup file again). `start.bat` is a fallback that shows a console with logs. Server logs are in `data\server.log`.
+## What it does
 
-The first transcription downloads the Whisper *large-v3-turbo* model (about 1.6 GB, one time only) into `data\models`. Windows SmartScreen may warn about the unsigned exe the first time: choose *More info → Run anyway*.
+You sit in a call where someone shares their screen and walks you through a job, such as renewing TLS certificates. The phone records it. The PC turns it into everything you need afterwards.
 
-## Phone recordings from Pocket Scribe
-
-The [Pocket Scribe Android source and build instructions](pocket-scribe/) are included in this repository.
-
-1. Connect Google Drive once in Pocket Scribe on your phone. On the PC, sign into the same account in Google Drive for desktop.
-2. Stop and save a recording on the phone. Pocket Scribe uploads the finished MP4 or M4A and its recording details automatically.
-3. In Pocket Scribe Desktop, open **Phone recordings**. The inbox looks for the **Pocket Scribe** folder in **My Drive**. You can also click **Drive folder** and paste its path from File Explorer, for example G:\My Drive\Pocket Scribe. The earlier **VoiceCam** folder is also supported.
-4. Click **Process**. Pocket Scribe Desktop verifies the complete file, copies it to the local session, and starts its transcript and summary workflow. You can generate a runbook from the resulting session.
-
-The inbox refreshes while Pocket Scribe Desktop is open and shows the recording's name, date, duration and mode. Live backup parts are kept separately in Drive.
-
-## What each model does
-
-| Job | Model | Why |
+| | Phone: **Pocket Scribe** | PC: **Pocket Scribe Desktop** |
 |---|---|---|
-| Speech → transcript | **Whisper large-v3-turbo** (faster-whisper) | LLMs can't hear audio; Whisper is the standard for this |
-| Runbook writing | **gpt-oss:120b** ("Writer") | Highest quality writing; 128k context; reasoning effort is configurable |
-| Summary, chapters, Q&A | **Qwen3.6-35B-A3B** ("Assistant") | MoE with ~3B active parameters, so it's fast enough for interactive chat |
-| Screenshot descriptions | **Qwen3.6-35B-A3B** ("Vision") | Multimodal; reads console pages, configs and errors in frames |
-| — | qwen3:8b | Not needed. You can use it as a fallback Assistant if memory gets tight |
+| **Job** | Records audio, or audio and video, with the screen off | Turns the recording into outputs |
+| **Hands off by** | Uploading to the **Pocket Scribe** folder in Google Drive | Picking it up from Google Drive for desktop by itself |
+| **You get** | A named recording, kept until Drive confirms it | Transcript, screenshots, summary, KT document, meeting invite, Claude bundle and Q&A |
+| **Runs on** | Android 8 or later | Windows 10 or 11, models on **Ollama**, **vLLM** or (optional) **Claude** |
 
-You can change any role in **Settings**. Models are auto-assigned on first launch.
+## Highlights
+
+- **One clean page.** Every session is a card with a six-step rail: Audio, Transcript, Screenshots, Summary, KT document, Invite. Light and dark mode, soft animations, an **i** button that explains everything and a full **Settings** page.
+- **Hands-free from the phone.** Name the recording on the phone, and the PC starts processing as soon as Drive syncs it. Finished outputs are copied back to **Pocket Scribe › Outputs** in Drive so you can open them anywhere.
+- **Screenshots that matter.** A frame is kept each time the shared screen changes, then described by a vision model. Webcam-only frames are hidden.
+- **A KT document you can edit.** Written step by step from the transcript and screenshots, with `[mm:ss]` links back to the video. Export Word, PDF or Markdown.
+- **A meeting invite.** Subject, agenda, attendees and prep for the follow-up, as text or an `.ics` for Outlook.
+- **A bundle for Claude.** One zip with a brief, the transcript, the KT document and the screenshots, ready to give Claude to build the automation you just watched.
+- **Your models, your PC.** Ollama or any OpenAI-compatible server such as vLLM. Claude is there if you want it, with the key stored encrypted on the PC.
+
+## Screens
+
+| Session overview | KT document |
+|---|---|
+| ![Session overview with summary, key points and chapters](docs/images/session-overview-light.png) | ![KT document with a table and an embedded screenshot](docs/images/session-kt-dark.png) |
+| **Screenshots** | **Meeting invite** |
+| ![Screenshots kept at each screen change, with descriptions](docs/images/session-screenshots-light.png) | ![Meeting invite draft with agenda and .ics download](docs/images/session-invite-light.png) |
+| **Claude bundle** | **Ask** |
+| ![Claude bundle with goal, file list and Drive copy](docs/images/session-bundle-light.png) | ![Ask answering with timestamp links](docs/images/session-ask-dark.png) |
+| **Settings** | **How it works (i)** |
+| ![Settings: AI models, Drive, outputs, screenshots, speech, templates, appearance](docs/images/settings-light.png) | ![The info page](docs/images/info-dark.png) |
+
+More screens, in both themes, are in the [user guide](docs/user-guide.md).
+
+## Install in three steps
+
+1. **Get a model server.** Install [Ollama for Windows](https://docs.ollama.com/windows) and pull a writer and an assistant model, for example `ollama pull gpt-oss:120b` and `ollama pull qwen3.6:27b`. A vLLM server works too.
+2. **Install the desktop app.** Download this repository to a folder you'll keep, for example `C:\Users\you\Pocket Scribe`, and double-click **`Setup Pocket Scribe Desktop.bat`**. It takes 5 to 10 minutes the first time and puts a **Pocket Scribe Desktop** icon on your Desktop.
+3. **Connect the phone.** Build and install the Android app, connect Google Drive in its Settings, and sign in to the same account in Google Drive for desktop on the PC.
+
+The [install guide](docs/INSTALL.md) has every step, including the one-time Google setup. To have Claude Cowork do the PC part for you, paste the [Cowork install prompt](docs/COWORK-INSTALL-PROMPT.md).
 
 ## How it works
 
 ```
-video ─► ffmpeg (16 kHz audio) ─► Whisper ─► transcript.json  (shown live while transcribing)
-      └► screen-change detection (1 fps thumbnails) ─► screenshots ─► vision model descriptions
-transcript + screenshots ─► Assistant: summary, key points, chapters, systems, open questions
-                        └► Writer: runbook (Markdown, [mm:ss] citations, ![](frame:F0012) images)
-                        └► Assistant: Q&A chat (answers cite timestamps; click to jump)
+Phone                        Google Drive                     PC
+─────                        ────────────                     ──
+record ─► name & save ─────► My Drive › Pocket Scribe ──────► Pocket Scribe Desktop
+                             (mp4/m4a + details .json)        │
+                                                              ├─ ffmpeg ─► Whisper ─► transcript
+                                                              ├─ screen-change detection ─► screenshots ─► vision model
+                                                              ├─ assistant model ─► summary, chapters, invite, Ask
+                                                              ├─ writer model ─► KT document
+                                                              └─ zip ─► Claude bundle
+                             My Drive › Pocket Scribe ◄───────┘ copies KT document, invite and bundle
+                             › Outputs
 ```
 
-- **Screenshots** are captured when the shared screen settles on new content. They aren't taken at fixed intervals. Use *Screenshot sensitivity* (Low/Medium/High) to tune this. Frames that only show the webcam are tagged automatically and kept out of the runbook. **📸 Capture frame** under the player adds any moment by hand.
-- **Transcript fixes:** double-click any sentence to correct it, or use **Find & replace** (for example *cloud watch → CloudWatch*). Add product names to *Vocabulary hints* so Whisper gets them right first time.
-- **Runbook:** you can edit, split or preview it. Use 🖼 *Insert screenshot* to add images. It autosaves, and *Regenerate* keeps the previous version so you can swap back. You can change the section structure in Settings → Runbook template.
-- **Exports:** the runbook goes to DOCX, PDF or MD, with screenshots embedded. The transcript goes to DOCX/PDF (with summary and chapters), TXT, SRT or MD.
-- **Long sessions:** if a transcript is longer than *Max context*, it's condensed into dense timestamped notes first (map-reduce), so 2–3 hour KTs work too.
+| Step | Runs where | Model |
+|---|---|---|
+| Speech to text | Your PC | Whisper large-v3-turbo (faster-whisper on CPU, or whisper.cpp on GPU) |
+| Screenshot descriptions | Your model server | **Vision** model, for example `qwen3.6:27b` |
+| Summary, chapters, invite, Ask | Your model server | **Assistant** model, for example `qwen3.6:27b` |
+| KT document | Your model server | **Writer** model, for example `gpt-oss:120b` |
 
-## Speed on a Ryzen AI Max (128 GB)
+Models are picked for you on first launch. You can change any of them in **Settings › AI models**.
 
-- faster-whisper runs on the **CPU**, because its GPU path is NVIDIA-only. With 16 Zen 5 cores, a 1-hour call should take very roughly 5–15 minutes with large-v3-turbo. You can follow progress live.
-- **Optional AMD GPU transcription:** use a **Vulkan build of whisper.cpp**, either built with `-DGGML_VULKAN=1` or a prebuilt Vulkan Windows binary. Download `ggml-large-v3-turbo.bin`, then in Settings → Speech to text choose **whisper.cpp** and set both paths.
-- The LLM steps run on your GPU through Ollama. gpt-oss:120b (~65 GB) and Qwen3.6-35B (~24 GB) both fit. If your BIOS/Adrenalin *Variable Graphics Memory* is set lower, Ollama swaps models between steps, which is slower but still works.
+## Privacy
 
-## Data & privacy
+The desktop app listens only on `127.0.0.1`. Recordings, transcripts and outputs stay in the app's `data` folder and in your own Google Drive. Nothing goes to a cloud model unless you choose **Claude** in Settings. API keys are encrypted with Windows (DPAPI) and never shown again after you save them. The phone uses the `drive.file` scope, so it can only see files it created.
 
-Everything lives in `data\` next to the app: `data\sessions\<id>\` holds the transcript, screenshots, runbook and chat, and `data\settings.json` holds your settings. The server only listens on 127.0.0.1. Nothing is sent anywhere except to your local Ollama.
+## Repository layout
 
-## Troubleshooting
-
-| Problem | Fix |
+| Path | What it is |
 |---|---|
-| "Ollama not reachable" (bottom-left) | Start Ollama; check the URL in Settings |
-| Video won't play in the browser | Transcript, runbook and chat still work. MP4 (H.264) and WebM play everywhere |
-| Words like product names are wrong | Add them to Vocabulary hints, then use Find & replace on this session |
-| Too many / too few screenshots | Screenshots tab → pick a sensitivity → ↻ *Re-detect* |
-| Runbook step is slow to start | First load of gpt-oss:120b takes about a minute; the status line shows *Thinking* |
-| Reset everything | Close the app and delete the `data` folder |
+| `app/`, `static/`, `run.py`, `launcher.py` | Pocket Scribe Desktop (FastAPI server and the single-page app) |
+| `Setup Pocket Scribe Desktop.bat`, `scripts/` | One-time Windows setup and shortcuts |
+| `pocket-scribe/` | Pocket Scribe for Android (Kotlin) |
+| `docs/` | Install guide, user guide, Cowork prompt and screenshots |
+| `tests/` | Desktop tests (`python -m pytest -q tests`) |
 
-Run on another port: `set KTSCRIBE_PORT=8800` before `start.bat`.
+## Help
+
+- [Troubleshooting](docs/user-guide.md#troubleshooting)
+- [What's new](CHANGELOG.md)
