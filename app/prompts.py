@@ -139,3 +139,46 @@ CAPTION_PROMPT = """This is a frame from a recorded technical knowledge-transfer
 
 Describe what the screen shows in 1-2 sentences for an engineer: the application or console page (e.g. "AWS CloudWatch alarms list", "Jenkins job config"), and key visible names, settings, values or errors.
 If the frame only shows people / a webcam view with no useful screen content, reply exactly: WEBCAM"""
+
+INVITE_SYSTEM = ("You draft meeting invites from a recorded working session and return JSON only. "
+                 "Write in a plain, friendly, professional tone. " + CONTEXT_NOTE)
+
+INVITE_USER = """{instructions}
+
+Return JSON with:
+- "subject": invite subject line (max 10 words)
+- "purpose": one sentence on why the meeting is needed
+- "attendees": names or teams mentioned in the session who should attend (empty list if none were named)
+- "agenda": 3-6 items in order, each {{"item": "...", "minutes": number}}; minutes add up to about {duration}
+- "prepare": things attendees should bring or read beforehand
+- "body": the invite text to paste into Outlook or Google Calendar: a greeting, the purpose, the agenda as a short list, what to prepare, and a sign-off. No placeholders for names you don't know.
+
+Use only what the session shows; don't invent people or dates.
+
+SESSION TITLE: {title}
+
+SUMMARY:
+{summary}
+
+ACTION ITEMS:
+{actions}
+
+OPEN QUESTIONS:
+{questions}
+
+{source_label}:
+{transcript}"""
+
+INVITE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "subject": {"type": "string"},
+        "purpose": {"type": "string"},
+        "attendees": {"type": "array", "items": {"type": "string"}},
+        "agenda": {"type": "array", "items": {"type": "object", "properties": {
+            "item": {"type": "string"}, "minutes": {"type": "integer"}}, "required": ["item", "minutes"]}},
+        "prepare": {"type": "array", "items": {"type": "string"}},
+        "body": {"type": "string"},
+    },
+    "required": ["subject", "purpose", "attendees", "agenda", "prepare", "body"],
+}

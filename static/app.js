@@ -1,12 +1,13 @@
-/* Pocket Scribe Desktop front-end — vanilla JS, no build step. */
+/* Pocket Scribe front-end: one page, no build step. */
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 const S = {
-  sessions: [], cur: null, meta: null, transcript: { segments: [] }, frames: [], summary: {},
-  runbook: { text: "" }, chat: [], settings: {}, health: null, tab: "overview", rbMode: "preview",
-  rbDirty: false, segIndex: [], lastLoaded: {}, chatBusy: false,
+  sessions: [], phone: null, health: null, settings: {}, defaults: {},
+  cur: null, meta: null, transcript: { segments: [] }, frames: [], summary: {}, runbook: { text: "" },
+  invite: null, bundle: null, chat: [], tab: "overview", rbMode: "preview", rbDirty: false, segIndex: [],
+  chatBusy: false, dismissed: "", nextOptions: { language: "", vocabulary: "", frame_sensitivity: "", title: "" },
 };
 
 // ------------------------------------------------------------------ helpers
@@ -40,19 +41,49 @@ function parseTs(str) {
 }
 function dur(sec) {
   if (!sec) return "";
-  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
-  return h ? `${h}h ${m}m` : `${m} min`;
+  const h = Math.floor(sec / 3600), m = Math.max(1, Math.round((sec % 3600) / 60));
+  return h ? `${h} h ${m} min` : `${m} min`;
+}
+function when(t) {
+  const d = new Date(t * 1000), now = new Date();
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return "Today " + time;
+  const y = new Date(now); y.setDate(now.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return "Yesterday " + time;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + time;
 }
 function ago(t) {
-  const d = (Date.now() / 1000 - t);
+  const d = Date.now() / 1000 - t;
   if (d < 60) return "just now";
-  if (d < 3600) return Math.floor(d / 60) + "m ago";
-  if (d < 86400) return Math.floor(d / 3600) + "h ago";
+  if (d < 3600) return Math.floor(d / 60) + " min ago";
+  if (d < 86400) return Math.floor(d / 3600) + " h ago";
   return new Date(t * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
+const kb = (n) => n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1e3)) + " KB";
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+const st = (m, k) => (m?.[k] || {}).state || "none";
 const isBusy = (m) => m && (m.status === "running" || m.status === "queued");
-const rbBusy = (m) => m && ["running", "queued"].includes(m.runbook?.state);
+const rbBusy = (m) => ["running", "queued"].includes(st(m, "runbook"));
+const invBusy = (m) => ["running", "queued"].includes(st(m, "invite"));
+const anyBusy = (m) => isBusy(m) || rbBusy(m) || invBusy(m) || ["running", "queued"].includes(st(m, "drive"));
+
+// ------------------------------------------------------------------ theme
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+function applyTheme(pref) {
+  pref = pref || "system";
+  try { localStorage.setItem("ps-theme", pref); } catch {}
+  const dark = pref === "dark" || (pref === "system" && darkQuery.matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+}
+function applyAnim(on) {
+  document.documentElement.classList.toggle("no-anim", on === false);
+  try { localStorage.setItem("ps-anim", on === false ? "off" : "on"); } catch {}
+}
+darkQuery.addEventListener("change", () => applyTheme(S.settings.theme));
+$("#themeBtn").onclick = () => {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  applyTheme(next); saveSetting("theme", next);
+};
 
 // ------------------------------------------------------------------ markdown
 marked.use({
@@ -69,7 +100,7 @@ marked.use({
   },
 });
 function md(text) {
-  let html = marked.parse(text || "");
+  const html = marked.parse(text || "");
   return html.replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g, (_, t) => `<button class="tchip" data-t="${parseTs(t)}">${t}</button>`);
 }
 document.addEventListener("click", (e) => {
@@ -80,165 +111,372 @@ document.addEventListener("click", (e) => {
 });
 $("#lightbox").onclick = () => ($("#lightbox").hidden = true);
 
+// ------------------------------------------------------------------ step rail
+const RAIL = [["audio", "Audio"], ["transcript", "Transcript"], ["shots", "Screenshots"], ["summary", "Summary"], ["kt", "KT document"], ["invite", "Invite"]];
+function railStates(m) {
+  if (!m.stages) return Object.fromEntries(RAIL.map(([k]) => [k, m._phone === "available" ? (k === "audio" ? "turn" : "pending") : "pending"]));
+  const g = m.stages;
+  const shots = g.frames === "skipped" ? "skipped" : [g.frames, g.captions].includes("running") ? "running"
+    : g.frames === "error" ? "error" : g.frames === "done" && g.captions !== "pending" ? "done" : "pending";
+  const out = (state, auto) => ({ running: "running", queued: "running", done: "done", error: "error" }[state]
+    || (m.status === "ready" && !auto ? "turn" : "pending"));
+  return {
+    audio: g.audio, transcript: g.transcript, shots, summary: g.summary === "error" ? "error" : g.summary,
+    kt: out(st(m, "runbook"), S.settings.auto_kt_doc), invite: out(st(m, "invite"), S.settings.auto_invite),
+  };
+}
+function rail(m, big = false) {
+  const s = railStates(m);
+  let h = "";
+  RAIL.forEach(([k, label], i) => {
+    const state = s[k] || "pending";
+    if (i) {
+      const prev = s[RAIL[i - 1][0]];
+      const line = ["done", "skipped"].includes(prev) && ["done", "skipped"].includes(state) ? "done" : state === "running" ? "run" : "";
+      h += `<span class="line ${line}"></span>`;
+    }
+    h += `<span class="node ${state}" title="${label}: ${state}"><i></i>${label}</span>`;
+  });
+  return `<div class="rail ${big ? "big" : ""}">${h}</div>`;
+}
+function badge(m) {
+  if (m._phone === "syncing") return ["SYNCING", "warn"];
+  if (m._phone === "available") return ["YOUR TURN", "bad turn"];
+  if (anyBusy(m)) return [m.status === "queued" ? "QUEUED" : "WORKING", "info work"];
+  if (m.status === "error") return ["YOUR TURN", "bad turn"];
+  if (m.status === "cancelled") return ["STOPPED", "warn"];
+  if ([st(m, "runbook"), st(m, "invite")].includes("error")) return ["CHECK", "warn"];
+  if (m.status === "ready") return ["READY", "ok ready"];
+  return ["", ""];
+}
+
+// ------------------------------------------------------------------ main list
+const REEL = `<svg viewBox="0 0 48 48"><circle class="disc" cx="24" cy="24" r="23"/>
+  <circle class="groove" cx="24" cy="24" r="19"/><circle class="groove" cx="24" cy="24" r="15"/><circle class="groove" cx="24" cy="24" r="11.5"/>
+  <circle class="hub" cx="24" cy="24" r="7.5"/><circle class="spoke" cx="24" cy="24" r="2"/><circle class="spoke" cx="27.5" cy="20.5" r="1.1"/></svg>`;
+function phoneRows() {
+  const known = new Set(S.sessions.map((s) => s.phone_recording_id).filter(Boolean));
+  return (S.phone?.recordings || []).filter((r) => !r.sessionId && !known.has(r.id)).map((r) => ({
+    id: "phone:" + r.id, _rec: r, _phone: r.state === "available" ? "available" : "syncing", title: r.title,
+    created: Date.parse(r.startedAt) / 1000 || 0, duration: (r.durationMs || 0) / 1000, from_phone: true,
+  }));
+}
+function metaLine(m) {
+  const parts = [m.created ? when(m.created) : "", m.duration ? dur(m.duration) : ""];
+  parts.push(m.phone_recording_id || m.from_phone ? "From phone" : "From this PC");
+  if (m._phone === "syncing") parts.push("Waiting for Google Drive to finish syncing");
+  else if (m._phone === "available") {
+    const since = Date.parse(S.settings.auto_process_since || "") / 1000 || Infinity;
+    parts.push(S.settings.auto_process_phone && m.created >= since ? "Starts in a moment" : "Select Process to start");
+  }
+  else if (isBusy(m)) parts.push(`${m.message || "Working"} ${Math.round((m.progress || 0) * 100)}%`);
+  else if (rbBusy(m)) parts.push("Writing the KT document" + (m.runbook?.chars ? ` · ${m.runbook.chars.toLocaleString()} characters` : ""));
+  else if (invBusy(m)) parts.push("Drafting the meeting invite");
+  else if (m.status === "error") parts.push(m.error || "Stopped");
+  else if (st(m, "drive") === "done") parts.push("Copied to Drive");
+  return parts.filter(Boolean).map(esc).join(" · ");
+}
+function cardHtml(m) {
+  const [b, cls] = badge(m);
+  const btn = m._phone === "available" ? `<button class="btn primary" data-process="${m._rec.id}">Process</button>`
+    : m._phone ? "" : m.status === "error" || m.status === "cancelled" ? `<button class="btn primary" data-resume="${m.id}">Resume</button>`
+    : `<button class="btn ${m.status === "ready" && !anyBusy(m) ? "primary" : ""}" data-open="${m.id}">Open</button>`;
+  return `<article class="card scard" data-id="${esc(m.id)}">
+    <div class="reel ${anyBusy(m) ? "turning" : ""}">${REEL}</div>
+    <div class="top"><div><div class="title">${esc(m.title || "Untitled")}</div><div class="meta">${metaLine(m)}</div></div></div>
+    <div class="act"><span class="badge ${cls}">${b}</span>${btn}</div>
+    ${rail(m)}
+  </article>`;
+}
+let lastListHtml = "";
+function renderList() {
+  const q = $("#search").value.trim().toLowerCase();
+  const rows = [...phoneRows(), ...S.sessions].sort((a, b) => b.created - a.created)
+    .filter((m) => !q || (m.title || "").toLowerCase().includes(q));
+  const working = S.sessions.filter(anyBusy).length;
+  const ready = S.sessions.filter((m) => m.status === "ready" && !anyBusy(m)).length;
+  const yours = S.sessions.filter((m) => m.status === "error").length + phoneRows().filter((r) => r._phone === "available").length;
+  $("#counts").textContent = [working && `${working} working`, yours && `${yours} waiting for you`, ready && `${ready} ready`].filter(Boolean).join("  ·  ");
+  let html;
+  if (rows.length) html = rows.map(cardHtml).join("");
+  else if (q) html = `<div class="empty-list"><b>No sessions match “${esc(q)}”</b></div>`;
+  else html = `<div class="card empty-list"><b>No sessions yet</b>Record a meeting on your phone, or drop a recording above.
+    <div class="how3"><div><b>1 · Record</b>Pocket Scribe on the phone records the call with its camera and mic.</div>
+    <div><b>2 · Sync</b>The phone uploads it to Google Drive; it appears here by itself.</div>
+    <div><b>3 · Use it</b>Transcript, screenshots, KT document, invite and a bundle for Claude.</div></div></div>`;
+  if (html !== lastListHtml) {
+    // keep animations calm: only cards whose content changed are replaced
+    const box = $("#list");
+    const tmp = document.createElement("div"); tmp.innerHTML = html;
+    const old = new Map($$(".scard", box).map((el) => [el.dataset.id, el]));
+    const next = [...tmp.children];
+    if (next.every((n) => n.classList.contains("scard")) && old.size) {
+      box.replaceChildren(...next.map((n) => {
+        const o = old.get(n.dataset.id);
+        if (o && o.innerHTML === n.innerHTML) return o;
+        if (o) n.style.animation = "none";
+        return n;
+      }));
+    } else box.innerHTML = html;
+    lastListHtml = html;
+  }
+  renderActionBar(ready, yours, working);
+}
+function renderActionBar(ready, yours, working) {
+  const btn = $("#actionBtn");
+  const avail = phoneRows().filter((r) => r._phone === "available");
+  const latest = S.sessions.find((m) => m.status === "ready");
+  btn.hidden = false;
+  if (avail.length) {
+    $("#actionText").textContent = `${avail.length} phone recording${avail.length > 1 ? "s are" : " is"} ready to process.`;
+    btn.textContent = avail.length > 1 ? `Process all (${avail.length})` : "Process";
+    btn.onclick = async () => { for (const r of avail) await processPhone(r._rec.id); };
+  } else if (yours) {
+    const m = S.sessions.find((x) => x.status === "error");
+    $("#actionText").textContent = `“${m.title}” stopped: ${m.error || "see the session"}.`;
+    btn.textContent = "Open it"; btn.onclick = () => openSession(m.id);
+  } else if (working) {
+    const m = S.sessions.find(anyBusy);
+    $("#actionText").textContent = `Working on “${m.title}”. You can close this window; it carries on in the background.`;
+    btn.textContent = "Watch it"; btn.onclick = () => openSession(m.id, "transcript");
+  } else if (latest) {
+    $("#actionText").textContent = `${ready} session${ready > 1 ? "s are" : " is"} ready. Open one for the KT document, the invite or the Claude bundle.`;
+    btn.textContent = "Open latest"; btn.onclick = () => openSession(latest.id);
+  } else {
+    $("#actionText").textContent = "Add a recording, or record on your phone.";
+    btn.hidden = true;
+  }
+}
+$("#search").oninput = () => { lastListHtml = ""; renderList(); };
+$("#list").onclick = async (e) => {
+  const p = e.target.closest("[data-process]"); if (p) { e.stopPropagation(); return processPhone(p.dataset.process); }
+  const r = e.target.closest("[data-resume]"); if (r) { e.stopPropagation(); S.cur = r.dataset.resume; await resume(); S.cur = null; return; }
+  const c = e.target.closest(".scard"); if (!c || c.dataset.id.startsWith("phone:")) return;
+  openSession(c.dataset.id);
+};
+async function loadSessions() {
+  try { S.sessions = await api("/api/sessions"); } catch { return; }
+  renderList();
+}
+
+// ------------------------------------------------------------------ phone & Drive strip
+async function loadPhone() {
+  try { S.phone = await api("/api/phone-recordings"); } catch { S.phone = null; }
+  renderPhone(); renderList();
+}
+function renderPhone() {
+  const p = S.phone, auto = !!S.settings.auto_process_phone;
+  $("#autoToggle").checked = auto;
+  const chip = $("#phoneChip");
+  if (!p || !p.folderAvailable) {
+    chip.className = "chip warn"; chip.lastElementChild.textContent = "NO DRIVE";
+    $("#phoneTitle").textContent = "Google Drive folder not found";
+    $("#phoneSub").textContent = p?.folder ? `${p.folder} isn't reachable. Open Google Drive for desktop.` : "Install Google Drive for desktop and sign in, or set the folder in Settings › Phone & Google Drive.";
+    return;
+  }
+  const waiting = (p.recordings || []).filter((r) => r.state === "syncing").length;
+  chip.className = "chip " + (auto ? "ok" : "info"); chip.lastElementChild.textContent = auto ? "WATCHING" : "MANUAL";
+  $("#phoneTitle").textContent = auto ? "New phone recordings start by themselves" : "Phone recordings wait for you";
+  $("#phoneSub").textContent = p.folder + (waiting ? ` · ${waiting} still syncing` : ` · ${p.recordings.length} recording${p.recordings.length === 1 ? "" : "s"}`);
+}
+$("#autoToggle").onchange = async (e) => { await saveSetting("auto_process_phone", e.target.checked); renderPhone(); renderList(); };
+$("#phoneCheckBtn").onclick = async () => { $("#phoneCheckBtn").disabled = true; await loadPhone(); $("#phoneCheckBtn").disabled = false; toast("Checked Google Drive"); };
+async function processPhone(id) {
+  try {
+    const m = await api(`/api/phone-recordings/${id}/process`, { method: "POST", body: {} });
+    toast(`Started “${m.title}”`, "ok");
+    await Promise.all([loadSessions(), loadPhone()]); poll();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+// ------------------------------------------------------------------ health & banner
+async function checkHealth() {
+  try {
+    const h = await api("/api/health");
+    S.health = h; S.settings = h.settings;
+    applyTheme(S.settings.theme); applyAnim(S.settings.animations);
+  } catch { S.health = null; }
+  renderHealth();
+}
+function renderHealth() {
+  const h = S.health, pill = $("#sysPill");
+  let text, cls, problem = null;
+  if (!h) { text = "OFFLINE"; cls = "bad"; problem = ["OFFLINE", "Pocket Scribe's background service isn't answering. Open it again from the desktop shortcut."]; }
+  else if (!h.ffmpeg) { text = "NEEDS FFMPEG"; cls = "bad"; problem = ["FFMPEG", "ffmpeg is missing, so recordings can't be read. Run Setup Pocket Scribe Desktop again."]; }
+  else if (!h.ollama) { text = "AI OFFLINE"; cls = "warn"; problem = ["AI OFFLINE", `Can't reach ${h.engine}. Transcripts and screenshots still work; the summary, KT document and invite wait for the AI. ${h.ollama_error || ""}`, "Settings"]; }
+  else if (!h.settings.writer_model || !h.settings.assistant_model) { text = "PICK MODELS"; cls = "warn"; problem = ["MODELS", "Pick the models Pocket Scribe should use.", "Settings"]; }
+  else { text = "MODELS READY"; cls = "ok"; }
+  pill.className = "pill " + cls; pill.lastElementChild.textContent = text;
+  pill.title = h ? h.engine : "";
+  const key = problem ? problem[1] : "";
+  $("#banner").hidden = !problem || S.dismissed === key;
+  if (problem) {
+    $("#bannerChip").className = "chip " + (cls === "bad" ? "bad" : "warn");
+    $("#bannerChip").lastElementChild.textContent = problem[0];
+    $("#bannerText").textContent = problem[1];
+    $("#bannerAction").hidden = !problem[2];
+    $("#bannerAction").textContent = problem[2] || "";
+    $("#bannerDismiss").onclick = () => { S.dismissed = key; $("#banner").hidden = true; };
+  }
+}
+$("#bannerAction").onclick = () => openSettings();
+
+// ------------------------------------------------------------------ sheets
+function openSheet(el) {
+  el.hidden = false; el.classList.remove("closing");
+  document.body.classList.add("sheet-open");
+}
+function closeSheet(el) {
+  if (el.hidden) return;
+  el.classList.add("closing");
+  const done = () => { el.hidden = true; el.classList.remove("closing"); if (!$$(".sheet:not([hidden])").length) document.body.classList.remove("sheet-open"); };
+  if (document.documentElement.classList.contains("no-anim")) done(); else setTimeout(done, 220);
+}
+$$("[data-close]").forEach((b) => (b.onclick = () => {
+  const d = b.closest("dialog"); if (d) return d.close();
+  const s = b.closest(".sheet"); if (s === $("#settingsSheet")) closeSettings(); else closeSheet(s);
+}));
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || document.querySelector("dialog[open]")) return;
+  if (!$("#lightbox").hidden) { $("#lightbox").hidden = true; return; }
+  const open = $$(".sheet:not([hidden])").pop();
+  if (!open) return;
+  if (open.id === "sessionSheet") closeSession(); else if (open.id === "settingsSheet") closeSettings(); else closeSheet(open);
+});
+
 // ------------------------------------------------------------------ video
 const video = $("#video");
 function seek(t) {
-  if (t == null || isNaN(t)) return;
-  if ($("#svBody").classList.contains("focus")) setFocus(false);
+  if (t == null || isNaN(t) || !S.cur) return;
   video.currentTime = Math.max(0, t - 0.3);
   video.play().catch(() => {});
 }
 $("#rateSel").onchange = (e) => (video.playbackRate = +e.target.value);
 video.addEventListener("error", () => {
-  const m = S.meta;
+  if (!S.cur || !video.getAttribute("src")) return;
   $("#playerMsg").hidden = false;
-  $("#playerMsg").innerHTML = m && !m.video_path ? "Uploading…" :
-    "The browser can't play this file (format or location).<br>Transcript, runbook and Q&A still work.";
+  $("#playerMsg").textContent = "This browser can't play the file. The transcript, KT document and Ask still work.";
 });
 video.addEventListener("loadeddata", () => ($("#playerMsg").hidden = true));
 video.addEventListener("timeupdate", () => highlightNow(video.currentTime));
-
 let lastNow = -1;
 function highlightNow(t) {
   const idx = S.segIndex;
-  if (!idx.length) return;
-  let lo = 0, hi = idx.length - 1, ans = -1;
-  while (lo <= hi) { const mid = (lo + hi) >> 1; if (idx[mid].start <= t + 0.05) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
-  const id = ans >= 0 ? idx[ans].id : -1;
-  if (id === lastNow) return;
-  $$(".seg-s.now").forEach((e) => e.classList.remove("now"));
-  lastNow = id;
-  const el = document.querySelector(`.seg-s[data-id="${id}"]`);
-  if (el) {
-    el.classList.add("now");
-    if ($("#followToggle").checked && S.tab === "transcript" && !video.paused) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  if (idx.length) {
+    let lo = 0, hi = idx.length - 1, ans = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (idx[mid].start <= t + 0.05) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
+    const id = ans >= 0 ? idx[ans].id : -1;
+    if (id !== lastNow) {
+      $$(".seg-s.now").forEach((e) => e.classList.remove("now"));
+      lastNow = id;
+      const el = document.querySelector(`.seg-s[data-id="${id}"]`);
+      if (el) {
+        el.classList.add("now");
+        if ($("#followToggle").checked && S.tab === "transcript" && !video.paused) el.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    }
   }
   $$(".chapter").forEach((c) => c.classList.remove("now"));
   const chs = $$(".chapter").filter((c) => +c.dataset.seek <= t + 1);
   if (chs.length) chs[chs.length - 1].classList.add("now");
 }
 
-// ------------------------------------------------------------------ sidebar
-async function loadSessions() {
-  try { S.sessions = await api("/api/sessions"); } catch { return; }
-  renderSessions();
-}
-function statusPill(m) {
-  if (m.status === "running") return `<span class="pill run"><span class="spin"></span>${Math.round((m.progress || 0) * 100)}%</span>`;
-  if (m.status === "queued") return `<span class="pill run">Queued</span>`;
-  if (m.status === "error") return `<span class="pill err">Error</span>`;
-  if (m.status === "cancelled") return `<span class="pill">Cancelled</span>`;
-  if (rbBusy(m)) return `<span class="pill run"><span class="spin"></span>Runbook</span>`;
-  return "";
-}
-function renderSessions() {
-  const f = $("#sessionFilter").value.toLowerCase();
-  const list = S.sessions.filter((m) => !f || (m.title || "").toLowerCase().includes(f));
-  $("#sessionList").innerHTML = list.length ? list.map((m) => `
-    <div class="s-item ${m.id === S.cur ? "active" : ""}" data-id="${m.id}">
-      <div class="s-title">${esc(m.title || "Untitled")}</div>
-      <div class="s-sub">${ago(m.created)}${m.duration ? " · " + dur(m.duration) : ""} <span class="spacer"></span>${statusPill(m)}</div>
-      ${isBusy(m) ? `<div class="s-bar"><div style="width:${(m.progress || 0) * 100}%"></div></div>` : ""}
-    </div>`).join("") : `<div class="muted small pad">${f ? "No matches" : "No sessions yet"}</div>`;
-}
-$("#sessionList").onclick = (e) => { const it = e.target.closest(".s-item"); if (it) openSession(it.dataset.id); };
-$("#sessionFilter").oninput = renderSessions;
-
-async function checkHealth() {
-  try {
-    const h = await api("/api/health");
-    S.health = h; S.settings = h.settings;
-    const ok = h.ollama && h.ffmpeg;
-    $("#sysStatus").innerHTML = `<span class="dot ${ok ? "ok" : "err"}"></span><span title="${esc(h.ollama_error || h.ffmpeg_error || "")}">${
-      !h.ffmpeg ? "ffmpeg missing" : !h.ollama ? "Ollama not reachable" : `Ollama · ${h.models.length} models`}</span>`;
-  } catch { $("#sysStatus").innerHTML = `<span class="dot err"></span><span>Server offline</span>`; }
-}
-
-// ------------------------------------------------------------------ session view
+// ------------------------------------------------------------------ session sheet
 async function openSession(id, tab) {
-  if (S.rbDirty) await saveRunbook();
-  S.cur = id; S.lastLoaded = {}; S.transcript = { segments: [] }; S.frames = []; S.summary = {}; S.chat = []; S.runbook = { text: "" };
-  location.hash = id;
-  $("#welcome").hidden = true; $("#sessionView").hidden = false;
-  renderSessions();
   const m = await api(`/api/sessions/${id}`).catch(() => null);
-  if (!m) { toast("Session not found", "err"); return showWelcome(); }
-  S.meta = m;
+  if (!m) { toast("That session isn't there any more", "err"); return; }
+  S.cur = id; S.meta = m; S.transcript = { segments: [] }; S.segIndex = []; S.frames = []; S.summary = {}; S.chat = [];
+  S.runbook = { text: "" }; S.invite = null; S.bundle = null; S.rbDirty = false; lastNow = -1;
+  history.replaceState(null, "", "#" + id);
   video.src = m.video_path ? `/api/sessions/${id}/video` : "";
   $("#playerMsg").hidden = true;
-  await Promise.all([loadTranscript(), loadFrames(), loadSummary(), loadRunbook(), loadChat()]);
+  $("#genPanel").hidden = true;
+  openSheet($("#sessionSheet"));
+  $(".content-col").scrollTop = 0;
+  await Promise.all([loadTranscript(), loadFrames(), loadSummary(), loadRunbook(), loadInvite(), loadChat()]);
   renderMeta();
-  switchTab(tab || (isBusy(m) ? "transcript" : S.tab));
+  switchTab(tab || (isBusy(m) ? "transcript" : "overview"));
+  poll();
 }
-function showWelcome() {
-  S.cur = null; S.meta = null; location.hash = "";
-  $("#welcome").hidden = false; $("#sessionView").hidden = true; video.removeAttribute("src"); renderSessions();
+async function closeSession() {
+  if (S.rbDirty) await saveRunbook();
+  video.pause();
+  closeSheet($("#sessionSheet"));
+  S.cur = null; S.meta = null;
+  history.replaceState(null, "", location.pathname);
+  setTimeout(() => { if (!S.cur) video.removeAttribute("src"); }, 300);
+  loadSessions();
 }
+$("#backBtn").onclick = closeSession;
 
 function renderMeta() {
   const m = S.meta; if (!m) return;
   if (document.activeElement !== $("#svTitle")) $("#svTitle").textContent = m.title || "Untitled";
   const segs = S.transcript.segments || [];
   const words = segs.reduce((a, s) => a + s.text.split(/\s+/).length, 0);
-  $("#svMeta").innerHTML = [
+  $("#svMeta").textContent = [
     new Date(m.created * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }),
-    m.duration ? dur(m.duration) : "",
-    words ? words.toLocaleString() + " words" : "",
-    S.transcript.language ? "Language: " + S.transcript.language.toUpperCase() : "",
-    m.video_copied === false ? `<span title="${esc(m.video_path)}">📁 linked file</span>` : "",
-  ].filter(Boolean).map((x) => `<span>${x}</span>`).join("");
-  // progress strip
+    m.duration ? dur(m.duration) : "", words ? words.toLocaleString() + " words" : "",
+    m.phone_recording_id ? "From phone" : "", S.transcript.language ? S.transcript.language.toUpperCase() : "",
+  ].filter(Boolean).join(" · ");
+  const [b, cls] = badge(m);
+  $("#svBadge").className = "badge " + cls; $("#svBadge").textContent = b; $("#svBadge").hidden = !b;
+  $("#svRail").outerHTML = rail(m, true).replace('class="rail big"', 'class="rail big" id="svRail"');
   const busy = isBusy(m);
-  const showStrip = busy || m.status === "error" || m.status === "cancelled";
-  $("#progressStrip").hidden = !showStrip;
-  if (showStrip) {
-    const icons = { pending: "○", running: '<span class="spin"></span>', done: "✓", error: "!", skipped: "–" };
-    const labels = { audio: "Audio", transcript: "Transcript", frames: "Screenshots", captions: "Describe screenshots", summary: "Summary" };
-    $("#stagePills").innerHTML = Object.entries(m.stages).map(([k, v]) => `<span class="stage ${v}"><i>${icons[v] || "○"}</i>${labels[k]}</span>`).join("");
-    $("#progressBar").style.width = ((m.progress || 0) * 100).toFixed(1) + "%";
-    $("#progressMsg").innerHTML = m.status === "error" ? `<span class="err">${esc(m.error || "Failed")}</span>` :
-      m.status === "cancelled" ? "Cancelled." : esc(m.message || "") + (busy ? ` · ${Math.round((m.progress || 0) * 100)}%` : "");
-    $("#cancelBtn").hidden = !busy; $("#resumeBtn").hidden = busy;
-  }
+  let msg;
+  if (busy) msg = `${m.message || "Working"} · ${Math.round((m.progress || 0) * 100)}%`;
+  else if (m.status === "error") msg = `<span class="warn-text">${esc(m.error || "Stopped")}</span>`;
+  else if (m.status === "cancelled") msg = "Stopped. Resume carries on where it left off.";
+  else if (rbBusy(m)) msg = `Writing the KT document${m.runbook?.chars ? ` · ${m.runbook.chars.toLocaleString()} characters` : ""}`;
+  else if (invBusy(m)) msg = "Drafting the meeting invite";
+  else if (st(m, "drive") === "running" || st(m, "drive") === "queued") msg = "Copying the outputs to Google Drive";
+  else if (st(m, "drive") === "done") msg = `Ready. Outputs copied to Google Drive › Pocket Scribe › Outputs.`;
+  else msg = "Ready.";
+  $("#progressMsg").innerHTML = m.status === "error" && !busy ? msg : esc(msg);
+  $("#cancelBtn").hidden = !busy;
+  $("#resumeBtn").hidden = !(m.status === "error" || m.status === "cancelled");
   const w = m.warnings || [];
   $("#warnBanner").hidden = !w.length;
-  $("#warnBanner").innerHTML = w.map((x) => "⚠ " + esc(x)).join("<br>") + (w.length ? ` &nbsp;<button class="link-btn" id="retryLLM">Retry</button>` : "");
+  $("#warnBanner").innerHTML = w.length ? `<span class="chip warn"><i></i><span>CHECK</span></span><div class="strip-text">${w.map(esc).join("<br>")}</div><button class="btn" id="retryLLM">Try again</button>` : "";
   const rl = $("#retryLLM"); if (rl) rl.onclick = () => resume(w.some((x) => x.startsWith("Screenshot")) ? "captions" : "summary");
   $("#frameCount").textContent = S.frames.filter((f) => !f.hidden && f.kind !== "webcam").length || "";
-  renderExportMenu();
   if (S.tab === "overview") renderOverview();
 }
-
 $("#svTitle").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } });
 $("#svTitle").addEventListener("blur", async (e) => {
   const t = e.target.textContent.trim();
-  if (S.meta && t && t !== S.meta.title) { S.meta = await api(`/api/sessions/${S.cur}`, { method: "PATCH", body: { title: t } }); loadSessions(); }
+  if (S.meta && t && t !== S.meta.title) { S.meta = await api(`/api/sessions/${S.cur}`, { method: "PATCH", body: { title: t } }); loadSessions(); toast("Renamed", "ok"); }
 });
-$("#cancelBtn").onclick = async () => { await api(`/api/sessions/${S.cur}/cancel`, { method: "POST" }); toast("Cancelling…"); };
+$("#cancelBtn").onclick = async () => { await api(`/api/sessions/${S.cur}/cancel`, { method: "POST" }); toast("Stopping…"); };
 $("#resumeBtn").onclick = () => resume();
-async function resume(redo) {
-  S.meta = await api(`/api/sessions/${S.cur}/resume`, { method: "POST", body: redo ? { redo } : {} });
-  renderMeta(); loadSessions();
+async function resume(redo, options) {
+  try {
+    const body = {}; if (redo) body.redo = redo; if (options) body.options = options;
+    const m = await api(`/api/sessions/${S.cur}/resume`, { method: "POST", body });
+    if (S.meta && S.meta.id === m.id) { S.meta = m; renderMeta(); }
+    loadSessions(); poll();
+  } catch (e) { toast(e.message, "err"); }
 }
 $("#deleteBtn").onclick = async () => {
-  if (!confirm(`Delete “${S.meta.title}”?\n\nThis removes its transcript, screenshots and runbook.` + (S.meta.video_copied ? " The copied video is deleted too." : " Your original video file is not touched."))) return;
+  const m = S.meta;
+  if (!confirm(`Delete “${m.title}”?\n\nThis removes its transcript, screenshots, KT document and invite from this PC.` +
+    (m.video_copied ? " The copy of the recording is deleted too." : " Your original recording file is not touched.") +
+    (m.phone_recording_id ? " The phone's copy in Google Drive stays." : ""))) return;
   await api(`/api/sessions/${S.cur}`, { method: "DELETE" });
-  toast("Session deleted"); showWelcome(); loadSessions();
+  toast("Session deleted"); closeSession();
 };
-function setFocus(on) {
-  $("#svBody").classList.toggle("focus", on);
-  $("#focusBtn").textContent = on ? "⇥ Show video" : "⇤ Focus";
-}
-$("#focusBtn").onclick = () => setFocus(!$("#svBody").classList.contains("focus"));
 
 function renderExportMenu() {
   const b = `/api/sessions/${S.cur}/export`;
-  const hasT = (S.transcript.segments || []).length, hasR = (S.runbook.text || "").trim(), hasS = S.summary && S.summary.summary;
-  const item = (href, label, sub, ok) => ok ? `<a href="${href}" download>${label}<span>${sub}</span></a>` : "";
+  const hasT = (S.transcript.segments || []).length, hasR = (S.runbook.text || "").trim(), hasS = S.summary?.summary, hasI = !!S.invite;
+  const it = (href, label, sub) => `<a class="mi" href="${href}" download>${label}<span>${sub}</span></a>`;
+  const none = (t) => `<div class="mi muted">${t}</div>`;
   $("#exportMenu").innerHTML = `
-    <h6>Runbook</h6>${hasR ? item(`${b}/runbook.docx`, "Word document", ".docx", 1) + item(`${b}/runbook.pdf`, "PDF", ".pdf", 1) + item(`${b}/runbook.md`, "Markdown", ".md", 1) : `<div class="muted small pad">Generate a runbook first</div>`}
-    <hr><h6>Transcript</h6>${hasT ? item(`${b}/transcript.docx`, "Word (with summary & chapters)", ".docx", 1) + item(`${b}/transcript.pdf`, "PDF", ".pdf", 1) + item(`${b}/transcript.txt`, "Plain text", ".txt", 1) + item(`${b}/transcript.srt`, "Subtitles", ".srt", 1) + item(`${b}/transcript.md`, "Markdown", ".md", 1) : `<div class="muted small pad">Not ready yet</div>`}
-    ${hasS ? `<hr><h6>Summary</h6>${item(`${b}/summary.docx`, "Word document", ".docx", 1)}${item(`${b}/summary.pdf`, "PDF", ".pdf", 1)}` : ""}`;
+    <h6>KT document</h6>${hasR ? it(`${b}/runbook.docx`, "Word", ".docx") + it(`${b}/runbook.pdf`, "PDF", ".pdf") + it(`${b}/runbook.md`, "Markdown", ".md") : none("Write it first")}
+    <h6>Meeting invite</h6>${hasI ? it(`${b}/invite.ics`, "Calendar invite", ".ics") + it(`${b}/invite.txt`, "Text", ".txt") : none("Draft it first")}
+    <h6>For Claude</h6>${hasT ? it(`${b}/bundle.zip`, "Claude bundle", ".zip") : none("After the transcript")}
+    <h6>Transcript</h6>${hasT ? it(`${b}/transcript.docx`, "Word", ".docx") + it(`${b}/transcript.txt`, "Text", ".txt") + it(`${b}/transcript.srt`, "Subtitles", ".srt") : none("Not ready yet")}
+    ${hasS ? `<h6>Summary</h6>${it(`${b}/summary.docx`, "Word", ".docx")}${it(`${b}/summary.pdf`, "PDF", ".pdf")}` : ""}`;
 }
 $("#exportBtn").onclick = (e) => { e.stopPropagation(); renderExportMenu(); $("#exportMenu").hidden = !$("#exportMenu").hidden; };
 document.addEventListener("click", (e) => { if (!e.target.closest(".menu-wrap")) $("#exportMenu").hidden = true; });
@@ -246,57 +484,61 @@ document.addEventListener("click", (e) => { if (!e.target.closest(".menu-wrap"))
 // ------------------------------------------------------------------ tabs
 $("#tabs").onclick = (e) => { const b = e.target.closest("button[data-tab]"); if (b) switchTab(b.dataset.tab); };
 function switchTab(tab) {
+  if (S.tab === "runbook" && tab !== "runbook" && S.rbDirty) saveRunbook();
   S.tab = tab;
   $$("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
-  $$(".pane").forEach((p) => (p.hidden = p.dataset.pane !== tab));
-  if (tab === "overview") renderOverview();
-  if (tab === "transcript") renderTranscript();
-  if (tab === "runbook") renderRunbook();
-  if (tab === "frames") renderFrames();
-  if (tab === "ask") renderChat();
+  $$("#sessionSheet .pane").forEach((p) => (p.hidden = p.dataset.pane !== tab));
+  ({ overview: renderOverview, transcript: renderTranscript, runbook: renderRunbook, frames: renderFrames,
+    invite: renderInvite, bundle: loadBundle, ask: renderChat })[tab]?.();
 }
 
 // ------------------------------------------------------------------ overview
 async function loadSummary() { S.summary = await api(`/api/sessions/${S.cur}/summary`).catch(() => ({})); renderChapters(); }
 function renderChapters() {
   const chs = S.summary?.chapters || [];
-  $("#chapterList").innerHTML = chs.length ? chs.map((c) => `<div class="chapter" data-seek="${parseTs(c.start) ?? 0}"><span class="t">${esc(c.start)}</span><div><b>${esc(c.title)}</b>${c.summary ? `<p>${esc(c.summary)}</p>` : ""}</div></div>`).join("")
-    : `<div class="muted small pad">${isBusy(S.meta) ? "Appear after the summary is written." : "No chapters."}</div>`;
-  lastNow = -2; highlightNow(video.currentTime || 0);
+  $("#chapterList").innerHTML = chs.length ? chs.map((c) => `<button class="chapter" data-seek="${parseTs(c.start) ?? 0}"><span class="t">${esc(c.start)}</span><span><b>${esc(c.title)}</b>${c.summary ? `<em>${esc(c.summary)}</em>` : ""}</span></button>`).join("")
+    : `<div class="muted small">${isBusy(S.meta) ? "Chapters appear after the summary." : "No chapters."}</div>`;
+  highlightNow(video.currentTime || 0);
+}
+const inl = (x) => md(esc(x)).replace(/^<p>|<\/p>\s*$/g, "");
+function outState(key) {
+  const s = st(S.meta, key);
+  return { running: "Working…", queued: "Queued", error: "Failed", done: "Ready" }[s] || "Not yet";
 }
 function renderOverview() {
   const m = S.meta, s = S.summary || {};
   const segs = S.transcript.segments || [];
   const shots = S.frames.filter((f) => !f.hidden && f.kind !== "webcam").length;
   const words = segs.reduce((a, x) => a + x.text.split(/\s+/).length, 0);
-  const list = (arr) => `<ul>${arr.map((x) => `<li>${md(esc(x)).replace(/^<p>|<\/p>\s*$/g, "")}</li>`).join("")}</ul>`;
+  const list = (arr) => `<ul>${arr.map((x) => `<li>${inl(x)}</li>`).join("")}</ul>`;
+  const hasKt = (S.runbook.text || "").trim();
   let h = `<div class="ov">
     <div class="stat-row">
-      <div class="stat"><b>${m.duration ? dur(m.duration) : "—"}</b><span>Recording</span></div>
-      <div class="stat"><b>${words ? words.toLocaleString() : "—"}</b><span>Words transcribed</span></div>
-      <div class="stat"><b>${shots || "—"}</b><span>Screenshots</span></div>
-      <div class="stat"><b>${(S.runbook.text || "").trim() ? "Ready" : "—"}</b><span>Runbook</span></div>
+      <div class="stat"><b>${m.duration ? dur(m.duration) : "–"}</b><span>Recording</span></div>
+      <div class="stat"><b>${words ? words.toLocaleString() : "–"}</b><span>Words</span></div>
+      <div class="stat"><b>${shots || "–"}</b><span>Screenshots</span></div>
+      <div class="stat"><b>${hasKt ? "Ready" : outState("runbook")}</b><span>KT document</span></div>
     </div>
     <div class="quick">
-      <button class="btn sm" data-go="transcript">📝 Read transcript</button>
-      <button class="btn sm" data-go="runbook">${(S.runbook.text || "").trim() ? "📘 Open runbook" : "✨ Generate runbook"}</button>
-      <button class="btn sm" data-go="ask">💬 Ask a question</button>
+      <button class="btn sm ${hasKt ? "" : "primary"}" data-go="runbook">${hasKt ? "Open KT document" : "Write KT document"}</button>
+      <button class="btn sm" data-go="invite">${S.invite ? "Meeting invite" : "Draft meeting invite"}</button>
+      <button class="btn sm" data-go="bundle">Bundle for Claude</button>
+      <button class="btn sm" data-go="ask">Ask a question</button>
     </div>`;
   if (s.summary) {
-    h += `<h3>Summary</h3><div class="lead">${esc(s.summary)}</div>`;
+    h += `<h3>Summary</h3><p class="lead">${esc(s.summary)}</p>`;
     if (s.key_points?.length) h += `<h3>Key points</h3>${list(s.key_points)}`;
-    if (s.systems?.length) h += `<h3>Systems & tools mentioned</h3><div class="chips">${s.systems.map((x) => `<span class="chip">${esc(x)}</span>`).join("")}</div>`;
-    h += `<div class="ov-grid" style="margin-top:18px">`;
-    h += `<div class="ov-box"><h3>Action items</h3>${s.action_items?.length ? list(s.action_items) : '<div class="muted small">None noted</div>'}</div>`;
-    h += `<div class="ov-box"><h3>Open questions</h3>${s.open_questions?.length ? list(s.open_questions) : '<div class="muted small">None noted</div>'}</div></div>`;
+    if (s.systems?.length) h += `<h3>Systems and tools</h3><div class="chips">${s.systems.map((x) => `<span class="tag">${esc(x)}</span>`).join("")}</div>`;
+    h += `<div class="ov-grid">
+      <div class="ov-box"><h3>Action items</h3>${s.action_items?.length ? list(s.action_items) : '<p class="muted small">None noted</p>'}</div>
+      <div class="ov-box"><h3>Open questions</h3>${s.open_questions?.length ? list(s.open_questions) : '<p class="muted small">None noted</p>'}</div></div>`;
   } else if (isBusy(m)) {
-    h += `<div class="empty"><b><span class="spin"></span> ${esc(m.message || "Working")}…</b>The transcript appears live in the Transcript tab. Summary and chapters follow when transcription finishes.</div>`;
+    h += `<div class="empty"><b><span class="spin"></span> ${esc(m.message || "Working")}</b>The transcript fills in live under Transcript. The summary and chapters follow.</div>`;
   } else {
-    h += `<div class="empty"><b>No summary yet</b>${m.stages?.summary === "error" ? "The summary step failed — check that Ollama is running, then " : ""}<button class="link-btn" id="redoSum">write the summary now</button>.</div>`;
+    h += `<div class="empty"><b>No summary yet</b>${m.stages?.summary === "error" ? "The AI couldn't write it. Check Settings › AI models, then " : ""}<button class="link-btn" id="redoSum">write the summary now</button>.</div>`;
   }
-  h += "</div>";
-  $("#overviewPane").innerHTML = h;
-  $$("#overviewPane [data-go]").forEach((b) => (b.onclick = () => { switchTab(b.dataset.go); if (b.dataset.go === "runbook" && !(S.runbook.text || "").trim()) openGenPanel(); }));
+  $("#overviewPane").innerHTML = h + "</div>";
+  $$("#overviewPane [data-go]").forEach((b) => (b.onclick = () => { switchTab(b.dataset.go); if (b.dataset.go === "runbook" && !hasKt) openGenPanel(); }));
   const rs = $("#redoSum"); if (rs) rs.onclick = () => resume("summary");
 }
 
@@ -316,20 +558,19 @@ function blocks(segs, breaks = [], maxSec = 30, gap = 2.5) {
   if (cur) out.push(cur);
   return out;
 }
+let searchPos = -1;
 function renderTranscript() {
   const segs = S.transcript.segments || [];
   const q = $("#tSearch").value.trim();
-  const box = $("#transcript");
-  const keepScroll = box.closest(".pane").scrollTop;
+  const box = $("#transcript"), pane = box.closest(".pane"), keep = pane.scrollTop;
   if (!segs.length) {
-    box.innerHTML = `<div class="empty"><b>${isBusy(S.meta) ? '<span class="spin"></span> Transcribing…' : "No transcript"}</b>${isBusy(S.meta) ? "Text will start appearing here in a moment." : ""}</div>`;
+    box.innerHTML = `<div class="empty"><b>${isBusy(S.meta) ? '<span class="spin"></span> Transcribing' : "No transcript"}</b>${isBusy(S.meta) ? "Text starts appearing here in a moment." : ""}</div>`;
     $("#tStats").textContent = ""; return;
   }
   const chs = (S.summary?.chapters || []).map((c) => ({ t: parseTs(c.start) ?? 0, title: c.title }));
-  let ci = 0;
+  let ci = 0, hits = 0;
   const re = q ? new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi") : null;
-  let hits = 0;
-  const html = blocks(segs, chs.map((c) => c.t)).map((b) => {
+  box.innerHTML = blocks(segs, chs.map((c) => c.t)).map((b) => {
     let pre = "";
     while (ci < chs.length && chs[ci].t <= b.start + 1) { pre += `<div class="tchapter">${esc(chs[ci].title)}</div>`; ci++; }
     const inner = b.segs.map((s) => {
@@ -338,16 +579,12 @@ function renderTranscript() {
       return `<span class="seg-s" data-id="${s.id}" data-start="${s.start}">${t}</span>`;
     }).join(" ");
     return `${pre}<div class="tblock"><button class="ts" data-seek="${b.start}">${ts(b.start)}</button><p>${inner}</p></div>`;
-  }).join("");
-  box.innerHTML = html + (S.transcript.partial && isBusy(S.meta) ? `<div class="live-tail"><span class="spin"></span> Transcribing… ${Math.round((S.meta.progress || 0) * 100)}%</div>` : "");
+  }).join("") + (S.transcript.partial && isBusy(S.meta) ? `<div class="live-tail"><span class="spin"></span> Transcribing · ${Math.round((S.meta.progress || 0) * 100)}%</div>` : "");
   $("#tSearchCount").textContent = q ? `${hits} match${hits === 1 ? "" : "es"}` : "";
   const words = segs.reduce((a, s) => a + s.text.split(/\s+/).length, 0);
-  $("#tStats").textContent = `${words.toLocaleString()} words · double-click text to correct it`;
-  box.closest(".pane").scrollTop = keepScroll;
-  lastNow = -1; highlightNow(video.currentTime);
-  searchPos = -1;
+  $("#tStats").textContent = `${words.toLocaleString()} words · double-click to correct`;
+  pane.scrollTop = keep; lastNow = -1; highlightNow(video.currentTime); searchPos = -1;
 }
-let searchPos = -1;
 $("#tSearch").addEventListener("input", debounce(renderTranscript, 200));
 $("#tSearch").addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
@@ -358,9 +595,7 @@ $("#tSearch").addEventListener("keydown", (e) => {
 });
 $("#transcript").addEventListener("click", (e) => {
   const s = e.target.closest(".seg-s");
-  if (s && s.contentEditable !== "true" && !window.getSelection().toString() && e.detail === 1) {
-    clearTimeout(s._t); s._t = setTimeout(() => seek(+s.dataset.start), 220);
-  }
+  if (s && s.contentEditable !== "true" && !getSelection().toString() && e.detail === 1) { clearTimeout(s._t); s._t = setTimeout(() => seek(+s.dataset.start), 220); }
 });
 $("#transcript").addEventListener("dblclick", (e) => {
   const s = e.target.closest(".seg-s"); if (!s) return;
@@ -384,11 +619,11 @@ $("#replaceToggle").onclick = () => { $("#replaceRow").hidden = !$("#replaceRow"
 $("#rGo").onclick = async () => {
   const find = $("#rFind").value.trim(); if (!find) return;
   const r = await api(`/api/sessions/${S.cur}/transcript/replace`, { method: "POST", body: { find, replace: $("#rWith").value, whole: $("#rWhole").checked } });
-  toast(`Replaced ${r.count} occurrence${r.count === 1 ? "" : "s"}`, "ok");
+  toast(`Replaced ${r.count} time${r.count === 1 ? "" : "s"}`, "ok");
   await loadTranscript();
 };
 
-// ------------------------------------------------------------------ runbook
+// ------------------------------------------------------------------ KT document
 async function loadRunbook() {
   const r = await api(`/api/sessions/${S.cur}/runbook`).catch(() => ({ text: "" }));
   if (S.rbDirty && !rbBusy(S.meta)) return;
@@ -400,23 +635,22 @@ function renderRunbook() {
   const ed = $("#rbEditor");
   if (document.activeElement !== ed || busy) ed.value = r.text || "";
   ed.readOnly = busy;
-  $("#rbPreview").innerHTML = (r.text || "").trim() ? md(r.text) : busy ? `<div class="empty"><b><span class="spin"></span> ${m.runbook?.state === "queued" ? "Waiting for the current job to finish…" : "The writer model is reading the session…"}</b>Text appears here as it's written. Large models can take a minute or two to start.</div>` : `<div class="empty"><b>No runbook yet</b>
-      Generate one from the transcript and screenshots with <b style="display:inline">${esc(S.settings.writer_model || "the writer model")}</b>, then edit it here.<br><br>
-      <button class="btn primary" id="genEmpty">✨ Generate runbook</button></div>`;
+  $("#rbPreview").innerHTML = (r.text || "").trim() ? md(r.text) : busy
+    ? `<div class="empty"><b><span class="spin"></span> ${st(m, "runbook") === "queued" ? "Waiting for the current job" : "The writer is reading the session"}</b>Text appears here as it's written. Big local models can take a minute to start.</div>`
+    : `<div class="empty"><b>No KT document yet</b>Pocket Scribe writes it from the transcript and screenshots with ${esc(S.settings.writer_model || "the writer model")}. You can edit it afterwards.<br><br><button class="btn primary" id="genEmpty">Write KT document</button></div>`;
   const ge = $("#genEmpty"); if (ge) ge.onclick = openGenPanel;
-  const st = m.runbook || {};
-  const box = $("#rbStatus");
+  const rs = m.runbook || {}, box = $("#rbStatus");
   if (busy) {
     box.hidden = false; box.className = "rb-status";
-    box.innerHTML = `<span class="spin"></span> ${esc(st.phase || "Working")} ${st.chars ? `· ${st.chars.toLocaleString()} characters` : ""} <span class="spacer"></span><button class="btn sm ghost" id="rbCancel">Stop</button>`;
+    box.innerHTML = `<span class="spin"></span> ${esc(rs.phase || "Working")}${rs.chars ? ` · ${rs.chars.toLocaleString()} characters` : ""}<span class="spacer"></span><button class="btn sm" id="rbCancel">Stop</button>`;
     $("#rbCancel").onclick = () => api(`/api/sessions/${S.cur}/runbook/cancel`, { method: "POST" });
-  } else if (st.state === "error") {
-    box.hidden = false; box.className = "rb-status err"; box.innerHTML = "⚠ " + esc(st.error || "Generation failed");
+  } else if (rs.state === "error") {
+    box.hidden = false; box.className = "rb-status err"; box.textContent = rs.error || "The writer stopped.";
   } else box.hidden = true;
   $("#genBtn").disabled = busy;
-  $("#genBtn").textContent = (r.text || "").trim() ? "✨ Regenerate" : "✨ Generate";
+  $("#genBtn").textContent = (r.text || "").trim() ? "Write again" : "Write KT document";
   $("#restoreBtn").hidden = !r.has_previous || busy;
-  $("#rbSaved").textContent = busy ? "" : S.rbDirty ? "Unsaved changes…" : st.updated ? "Saved " + ago(st.updated) : "";
+  $("#rbSaved").textContent = busy ? "" : S.rbDirty ? "Saving…" : rs.updated ? "Saved " + ago(rs.updated) : "";
   if (busy && S.rbMode !== "edit") { const p = $("#rbPreview"); p.scrollTop = p.scrollHeight; }
 }
 function setRbMode(mode) {
@@ -434,17 +668,17 @@ async function saveRunbook() {
     S.rbDirty = false; S.runbook.text = text;
     if (S.meta) S.meta.runbook = { ...(S.meta.runbook || {}), updated: Date.now() / 1000, state: "done" };
     $("#rbSaved").textContent = "Saved";
-  } catch (e) { toast("Save failed: " + e.message, "err"); }
+  } catch (e) { toast("Couldn't save: " + e.message, "err"); }
 }
 $("#rbEditor").addEventListener("input", () => {
-  S.rbDirty = true; $("#rbSaved").textContent = "Unsaved changes…";
+  S.rbDirty = true; $("#rbSaved").textContent = "Saving…";
   $("#rbPreview").innerHTML = md($("#rbEditor").value);
   saveRunbookSoon();
 });
 function openGenPanel() {
   $("#genPanel").hidden = false;
-  $("#genModel").textContent = `Writer: ${S.settings.writer_model || "not set"} · Screenshots: ${S.frames.filter((f) => !f.hidden && f.kind !== "webcam").length}` +
-    ((S.runbook.text || "").trim() ? " · The current version is kept as “Previous version”." : "");
+  $("#genModel").textContent = `Writer: ${S.settings.writer_model || "not set"} · ${S.frames.filter((f) => !f.hidden && f.kind !== "webcam").length} screenshots` +
+    ((S.runbook.text || "").trim() ? " · The current version is kept as the previous version." : "");
   $("#genInstr").focus();
 }
 $("#genBtn").onclick = () => ($("#genPanel").hidden ? openGenPanel() : ($("#genPanel").hidden = true));
@@ -455,25 +689,24 @@ $("#genGo").onclick = async () => {
     await api(`/api/sessions/${S.cur}/runbook/generate`, { method: "POST", body: { instructions: $("#genInstr").value } });
     $("#genPanel").hidden = true;
     S.meta.runbook = { state: "queued", phase: "Queued" };
-    setRbMode("preview"); renderRunbook(); poll();
+    setRbMode("preview"); renderRunbook(); renderMeta(); poll();
   } catch (e) { toast(e.message, "err"); }
 };
 $("#restoreBtn").onclick = async () => {
   const r = await api(`/api/sessions/${S.cur}/runbook/restore`, { method: "POST" });
   S.runbook.text = r.text; renderRunbook(); toast("Swapped to the previous version");
 };
-$("#insertShotBtn").onclick = () => openPicker();
-function openPicker() {
+$("#insertShotBtn").onclick = () => {
   const fr = S.frames.filter((f) => !f.hidden);
-  $("#pickGrid").innerHTML = fr.length ? fr.map((f) => frameCard(f, true)).join("") : `<div class="empty"><b>No screenshots</b>Use “Capture frame” under the video.</div>`;
-  $("#pickModal").hidden = false;
-}
+  $("#pickGrid").innerHTML = fr.length ? fr.map((f) => frameCard(f, true)).join("") : `<div class="empty"><b>No screenshots</b>Use Capture frame under the video.</div>`;
+  $("#pickDialog").showModal();
+};
 $("#pickGrid").onclick = (e) => {
   const c = e.target.closest(".fcard"); if (!c) return;
-  const f = S.frames.find((x) => x.id === c.dataset.id);
-  insertShot(f); $("#pickModal").hidden = true;
+  insertShot(S.frames.find((x) => x.id === c.dataset.id)); $("#pickDialog").close();
 };
 function insertShot(f) {
+  switchTab("runbook");
   if (S.rbMode === "preview") setRbMode("split");
   const ed = $("#rbEditor");
   const cap = (f.caption || `Screenshot at ${ts(f.t)}`).replace(/[\[\]]/g, "");
@@ -482,7 +715,6 @@ function insertShot(f) {
   ed.value = ed.value.slice(0, pos) + snippet + ed.value.slice(ed.selectionEnd ?? pos);
   ed.focus(); ed.selectionStart = ed.selectionEnd = pos + snippet.length;
   ed.dispatchEvent(new Event("input"));
-  switchTab("runbook");
   toast("Screenshot inserted", "ok");
 }
 
@@ -492,106 +724,226 @@ async function loadFrames() {
   $("#frameCount").textContent = S.frames.filter((f) => !f.hidden && f.kind !== "webcam").length || "";
   if (S.tab === "frames") renderFrames();
 }
+const ICON = {
+  insert: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  describe: '<svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>',
+  hide: '<svg viewBox="0 0 24 24"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z"/><circle cx="12" cy="12" r="2.5"/><path d="M4 4l16 16"/></svg>',
+  show: '<svg viewBox="0 0 24 24"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>',
+  del: '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13"/></svg>',
+};
 function frameCard(f, picker = false) {
   const dim = f.hidden || f.kind === "webcam";
   return `<div class="fcard ${dim && !picker ? "dim" : ""}" data-id="${f.id}">
     <div class="fimg" ${picker ? "" : "data-zoomframe"}><img src="/api/sessions/${S.cur}/frames/${f.id}.jpg" loading="lazy" alt="${esc(f.caption)}">
       <span class="t"><button class="tchip" data-t="${f.t}">${ts(f.t)}</button></span>
-      ${f.kind === "webcam" ? '<span class="badge">webcam</span>' : f.manual ? '<span class="badge">captured</span>' : ""}</div>
+      ${f.kind === "webcam" ? '<span class="badge warn">WEBCAM</span>' : f.manual ? '<span class="badge info">CAPTURED</span>' : ""}</div>
     <div class="fbody">
-      ${picker ? `<div class="fcap">${esc(f.caption)}</div>` : `<div class="fcap" contenteditable="true" spellcheck="false">${esc(f.caption)}</div>
+      ${picker ? `<div class="fcap">${esc(f.caption)}</div>` : `<div class="fcap" contenteditable="true" spellcheck="false" data-ph="Add a description">${esc(f.caption)}</div>
       <div class="factions">
-        <button class="icon-btn" data-act="insert" title="Insert into runbook">➕</button>
-        <button class="icon-btn" data-act="describe" title="Describe with vision model">✨</button>
-        <button class="icon-btn" data-act="hide" title="${f.hidden ? "Unhide" : "Hide (exclude from runbook)"}">${f.hidden ? "👁" : "🙈"}</button>
+        <button class="icon-btn" data-act="insert" title="Insert into the KT document">${ICON.insert}</button>
+        <button class="icon-btn" data-act="describe" title="Describe with the vision model">${ICON.describe}</button>
+        <button class="icon-btn" data-act="hide" title="${f.hidden ? "Show again" : "Hide: leave out of the KT document and the bundle"}">${f.hidden ? ICON.show : ICON.hide}</button>
         <span class="spacer"></span>
-        <button class="icon-btn danger" data-act="delete" title="Delete">🗑</button>
+        <button class="icon-btn danger" data-act="delete" title="Delete">${ICON.del}</button>
       </div>`}
     </div></div>`;
 }
 function renderFrames() {
   const all = S.frames, show = $("#showHidden").checked;
-  $("#sensSel").value = S.meta?.options?.frame_sensitivity || S.settings.frame_sensitivity || "medium";
+  const sens = S.meta?.options?.frame_sensitivity || S.settings.frame_sensitivity || "medium";
+  $$("#sensSeg button").forEach((b) => b.classList.toggle("active", b.dataset.v === sens));
   const fr = all.filter((f) => show || (!f.hidden && f.kind !== "webcam"));
   const hiddenN = all.length - all.filter((f) => !f.hidden && f.kind !== "webcam").length;
-  $("#frameInfo").textContent = `${all.length - hiddenN} screenshots` + (hiddenN ? ` · ${hiddenN} hidden/webcam` : "");
+  $("#frameInfo").textContent = `${all.length - hiddenN} screenshots` + (hiddenN ? ` · ${hiddenN} hidden or webcam` : "");
   $("#frameGrid").innerHTML = fr.length ? fr.map((f) => frameCard(f)).join("") :
-    `<div class="empty" style="grid-column:1/-1"><b>${S.meta.stages?.frames === "running" ? '<span class="spin"></span> Detecting screen changes…' : "No screenshots"}</b>
-      ${S.meta.has_video === false ? "This is an audio-only file." : "Play the video and use “📸 Capture frame” to add your own."}</div>`;
+    `<div class="empty" style="grid-column:1/-1"><b>${S.meta.stages?.frames === "running" ? '<span class="spin"></span> Finding screen changes' : "No screenshots"}</b>
+      ${S.meta.has_video === false ? "This recording is audio only." : "Play the video and use Capture frame to add your own."}</div>`;
 }
 $("#showHidden").onchange = renderFrames;
+$("#sensSeg").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; $$("#sensSeg button").forEach((x) => x.classList.toggle("active", x === b)); };
 $("#frameGrid").addEventListener("click", async (e) => {
   const card = e.target.closest(".fcard"); if (!card) return;
   const f = S.frames.find((x) => x.id === card.dataset.id);
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (!act && e.target.closest("[data-zoomframe]") && !e.target.closest(".tchip")) {
-    $("#lightImg").src = `/api/sessions/${S.cur}/frames/${f.id}.jpg`; $("#lightCap").textContent = `${ts(f.t)} — ${f.caption || ""}`; $("#lightbox").hidden = false; return;
+    $("#lightImg").src = `/api/sessions/${S.cur}/frames/${f.id}.jpg`; $("#lightCap").textContent = `${ts(f.t)} · ${f.caption || ""}`; $("#lightbox").hidden = false; return;
   }
   if (act === "insert") insertShot(f);
-  if (act === "hide") { f.hidden = !f.hidden; await api(`/api/sessions/${S.cur}/frames/${f.id}`, { method: "PATCH", body: { hidden: f.hidden, kind: f.kind === "webcam" && !f.hidden ? "screen" : f.kind } }); if (!f.hidden && f.kind === "webcam") f.kind = "screen"; renderFrames(); }
+  if (act === "hide") {
+    f.hidden = !f.hidden;
+    await api(`/api/sessions/${S.cur}/frames/${f.id}`, { method: "PATCH", body: { hidden: f.hidden, kind: f.kind === "webcam" && !f.hidden ? "screen" : f.kind } });
+    if (!f.hidden && f.kind === "webcam") f.kind = "screen";
+    renderFrames(); $("#frameCount").textContent = S.frames.filter((x) => !x.hidden && x.kind !== "webcam").length || "";
+  }
   if (act === "delete") { if (!confirm("Delete this screenshot?")) return; await api(`/api/sessions/${S.cur}/frames/${f.id}`, { method: "DELETE" }); S.frames = S.frames.filter((x) => x !== f); renderFrames(); }
   if (act === "describe") {
     const b = e.target.closest("[data-act]"); b.innerHTML = '<span class="spin"></span>';
     try { Object.assign(f, await api(`/api/sessions/${S.cur}/frames/${f.id}/describe`, { method: "POST" })); renderFrames(); }
-    catch (err) { toast(err.message, "err"); b.textContent = "✨"; }
+    catch (err) { toast(err.message, "err"); b.innerHTML = ICON.describe; }
   }
 });
 $("#frameGrid").addEventListener("focusout", async (e) => {
   const c = e.target.closest(".fcap"); if (!c) return;
   const f = S.frames.find((x) => x.id === c.closest(".fcard").dataset.id);
   const t = c.textContent.trim();
-  if (f && t !== f.caption) { f.caption = t; await api(`/api/sessions/${S.cur}/frames/${f.id}`, { method: "PATCH", body: { caption: t } }); toast("Description saved", "ok"); }
+  if (f && t !== (f.caption || "")) { f.caption = t; await api(`/api/sessions/${S.cur}/frames/${f.id}`, { method: "PATCH", body: { caption: t } }); toast("Description saved", "ok"); }
 });
 $("#captureBtn").onclick = async () => {
-  if (!S.cur || !video.src) return;
+  if (!S.cur || !video.getAttribute("src")) return;
   video.pause();
   try {
     const f = await api(`/api/sessions/${S.cur}/frames/capture`, { method: "POST", body: { t: video.currentTime } });
     S.frames.push(f); S.frames.sort((a, b) => a.t - b.t);
     $("#frameCount").textContent = S.frames.filter((x) => !x.hidden && x.kind !== "webcam").length;
-    toast(`Captured frame at ${ts(f.t)}`, "ok");
+    toast(`Captured the frame at ${ts(f.t)}`, "ok");
     if (S.tab === "frames") renderFrames();
     if (S.settings.vision_model) api(`/api/sessions/${S.cur}/frames/${f.id}/describe`, { method: "POST" }).then((r) => { Object.assign(f, r); if (S.tab === "frames") renderFrames(); }).catch(() => {});
   } catch (e) { toast(e.message, "err"); }
 };
-$("#recaptionBtn").onclick = async () => { if (confirm("Describe every screenshot again with the vision model? Manual descriptions are kept.")) resume("captions"); };
+$("#recaptionBtn").onclick = () => { if (confirm("Describe every screenshot again with the vision model? Descriptions you typed are kept.")) resume("captions"); };
 $("#redetectBtn").onclick = async () => {
-  if (!confirm("Detect screenshots again? Current screenshots (including captured ones) are replaced.")) return;
-  S.meta = await api(`/api/sessions/${S.cur}/resume`, { method: "POST", body: { redo: "frames", options: { frame_sensitivity: $("#sensSel").value } } });
-  S.frames = []; renderFrames(); renderMeta(); poll();
+  if (!confirm("Find screenshots again? The current ones, including any you captured, are replaced.")) return;
+  const v = $("#sensSeg button.active")?.dataset.v || "medium";
+  S.frames = []; renderFrames();
+  await resume("frames", { frame_sensitivity: v });
 };
 
-// ------------------------------------------------------------------ chat
+// ------------------------------------------------------------------ meeting invite
+async function loadInvite() {
+  const r = await api(`/api/sessions/${S.cur}/invite`).catch(() => ({ invite: null }));
+  S.invite = r.invite;
+  if (S.tab === "invite") renderInvite();
+}
+function renderInvite() {
+  const m = S.meta, inv = S.invite, busy = invBusy(m), b = `/api/sessions/${S.cur}/export`;
+  const ready = m.stages?.transcript === "done";
+  let h;
+  if (busy) h = `<div class="empty"><b><span class="spin"></span> Drafting the invite</b>The assistant model is reading the summary and the action items.</div>`;
+  else if (!inv) h = `<div class="empty"><b>No invite yet</b>${st(m, "invite") === "error" ? `<span class="warn-text">${esc(m.invite?.error || "The assistant stopped.")}</span><br>` : ""}
+      A follow-up meeting with a subject, agenda, what to prepare and a ready-to-send body.<br><br>
+      <button class="btn primary" id="invGen" ${ready ? "" : "disabled"}>${ready ? "Draft meeting invite" : "Waiting for the transcript"}</button></div>`;
+  else {
+    const agenda = (inv.agenda || []).map((a) => `<li>${esc(a.item)}${a.minutes ? ` <span class="muted">· ${a.minutes} min</span>` : ""}</li>`).join("");
+    h = `<div class="toolbar"><button class="btn sm primary" id="invCopy">Copy invite</button>
+        <a class="btn sm" href="${b}/invite.ics" download>Add to calendar (.ics)</a>
+        <a class="btn sm" href="${b}/invite.txt" download>Save as text</a>
+        <span class="spacer"></span><button class="btn sm" id="invGen">Draft again</button></div>
+      <div class="out-grid">
+        <div class="out-box"><h3>Subject</h3><input id="invSubject" value="${esc(inv.subject || "")}">
+          <h3>Message</h3><textarea id="invBody" class="invite-body" rows="14">${esc(inv.body || "")}</textarea>
+          <p class="help">Edits save by themselves. The calendar file opens at the next working day, 10:00; move it before you send.</p></div>
+        <div class="out-box"><h3>Purpose</h3><p>${esc(inv.purpose || "")}</p>
+          ${agenda ? `<h3>Agenda · ${inv.duration_minutes || S.settings.invite_duration || 30} min</h3><ol>${agenda}</ol>` : ""}
+          ${inv.attendees?.length ? `<h3>Who to invite</h3><div class="chips">${inv.attendees.map((x) => `<span class="tag">${esc(x)}</span>`).join("")}</div>` : ""}
+          ${inv.prepare?.length ? `<h3>Ask them to prepare</h3><ul>${inv.prepare.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>
+      </div>`;
+  }
+  $("#invitePane").innerHTML = h;
+  const g = $("#invGen");
+  if (g) g.onclick = async () => {
+    if (inv && !confirm("Draft the invite again? Your edits to this one are replaced.")) return;
+    try { await api(`/api/sessions/${S.cur}/invite/generate`, { method: "POST" }); S.meta.invite = { state: "queued" }; renderInvite(); renderMeta(); poll(); }
+    catch (e) { toast(e.message, "err"); }
+  };
+  const c = $("#invCopy");
+  if (c) c.onclick = async () => {
+    try { await navigator.clipboard.writeText(`Subject: ${$("#invSubject").value}\n\n${$("#invBody").value}`); toast("Invite copied. Paste it into Outlook or Gmail.", "ok"); }
+    catch { toast("Couldn't reach the clipboard", "err"); }
+  };
+  const save = debounce(async () => {
+    S.invite = await api(`/api/sessions/${S.cur}/invite`, { method: "PUT", body: { subject: $("#invSubject").value, body: $("#invBody").value } });
+  }, 700);
+  $("#invSubject")?.addEventListener("input", save);
+  $("#invBody")?.addEventListener("input", save);
+}
+
+// ------------------------------------------------------------------ Claude bundle
+async function loadBundle() {
+  const m = S.meta;
+  if (!(S.transcript.segments || []).length) {
+    $("#bundlePane").innerHTML = `<div class="empty"><b>${isBusy(m) ? '<span class="spin"></span> Waiting for the transcript' : "No transcript yet"}</b>The bundle needs the transcript first.</div>`;
+    return;
+  }
+  try { S.bundle = await api(`/api/sessions/${S.cur}/bundle`); } catch (e) { toast(e.message, "err"); return; }
+  renderBundle();
+}
+function renderBundle() {
+  const bd = S.bundle, m = S.meta, d = st(m, "drive");
+  const shots = bd.files.filter((f) => f.name.startsWith("screenshots/") && f.name.endsWith(".jpg"));
+  const docs = bd.files.filter((f) => !f.name.startsWith("screenshots/") || f.name.endsWith(".md"));
+  const total = bd.files.reduce((a, f) => a + f.bytes, 0);
+  const driveLine = d === "done" ? `Copied to Drive › Pocket Scribe › Outputs. <button class="link-btn" id="openDrive">Open folder</button>`
+    : d === "running" || d === "queued" ? '<span class="spin"></span> Copying to Google Drive' : d === "error" ? `<span class="warn-text">${esc(m.drive?.error || "Copy failed")}</span>` : "";
+  $("#bundlePane").innerHTML = `
+    <div class="out-grid">
+      <div class="out-box">
+        <h3>What should Claude build?</h3>
+        <textarea id="bGoal" rows="3" placeholder="e.g. A PowerShell script that renews the IIS certificate the way the team showed, with a dry-run switch and a rollback.">${esc(bd.goal || "")}</textarea>
+        <p class="help">This goes at the top of BRIEF.md. Leave it blank and Claude asks you.</p>
+        <div class="row-gap">
+          <a class="btn primary" href="/api/sessions/${S.cur}/export/bundle.zip" download>Download bundle (.zip)</a>
+          <button class="btn" id="bCopy">Copy brief</button>
+          <button class="btn" id="bDrive">Copy all outputs to Drive</button>
+        </div>
+        <p class="help">${driveLine}</p>
+        <h3>How to use it</h3>
+        <ol class="steps"><li>Download the bundle and unzip it.</li><li>In Claude, start a chat or a Cowork task and attach the folder's files (or the whole folder in Cowork).</li><li>Paste the brief as your first message.</li></ol>
+      </div>
+      <div class="out-box">
+        <h3>In the bundle · ${kb(total)}</h3>
+        <ul class="files">${docs.map((f) => `<li><span>${esc(f.name)}</span><em>${kb(f.bytes)}</em></li>`).join("")}
+          <li><span>screenshots/ · ${shots.length} image${shots.length === 1 ? "" : "s"}</span><em>${kb(shots.reduce((a, f) => a + f.bytes, 0))}</em></li></ul>
+        <h3>BRIEF.md</h3><article class="md brief">${md(bd.brief)}</article>
+      </div>
+    </div>`;
+  const save = debounce(async () => {
+    await api(`/api/sessions/${S.cur}`, { method: "PATCH", body: { bundle_goal: $("#bGoal").value } });
+    const nb = await api(`/api/sessions/${S.cur}/bundle`); S.bundle.brief = nb.brief; S.bundle.goal = nb.goal;
+    $(".brief").innerHTML = md(nb.brief);
+  }, 700);
+  $("#bGoal").addEventListener("input", save);
+  $("#bCopy").onclick = async () => {
+    try { await navigator.clipboard.writeText(S.bundle.brief); toast("Brief copied", "ok"); } catch { toast("Couldn't reach the clipboard", "err"); }
+  };
+  $("#bDrive").onclick = async () => {
+    try { await api(`/api/sessions/${S.cur}/drive`, { method: "POST" }); S.meta.drive = { state: "queued" }; renderBundle(); poll(); }
+    catch (e) { toast(e.message, "err"); }
+  };
+  const od = $("#openDrive");
+  if (od) od.onclick = () => api(`/api/sessions/${S.cur}/drive/open`, { method: "POST" }).catch((e) => toast(e.message, "err"));
+}
+
+// ------------------------------------------------------------------ Ask
 async function loadChat() { S.chat = await api(`/api/sessions/${S.cur}/chat`).catch(() => []); if (S.tab === "ask") renderChat(); }
-const SUGGEST = ["How is the application hosted on AWS?", "Walk me through the deployment steps", "How do we monitor it and what alerts exist?",
-  "List every server, URL and repo mentioned", "What are the common issues and how are they fixed?", "What was left unclear that I should follow up on?"];
+const SUGGEST = ["Walk me through the steps they showed", "List every server, URL, path and command mentioned",
+  "What has to happen before the certificate expires?", "What could go wrong, and how do they fix it?", "What was left unclear that I should follow up on?"];
 function renderChat() {
-  $("#askModel").textContent = S.settings.assistant_model ? "Model: " + S.settings.assistant_model : "No assistant model selected — open Settings";
+  $("#askModel").textContent = S.settings.assistant_model ? "Model: " + S.settings.assistant_model : "No assistant model yet. Pick one in Settings.";
   const box = $("#chat");
   if (!S.chat.length) {
-    box.innerHTML = `<div class="empty"><b>Ask anything about this session</b>Answers come from the transcript and cite the moment it was said — click a time to jump there.
+    box.innerHTML = `<div class="empty"><b>Ask anything about this session</b>Answers come from the transcript and point to the moment it was said. Select a time to jump there.
       <div class="suggest">${SUGGEST.map((q) => `<button>${esc(q)}</button>`).join("")}</div></div>`;
     $$(".suggest button", box).forEach((b) => (b.onclick = () => ask(b.textContent)));
     return;
   }
   box.innerHTML = S.chat.map((m) => m.role === "user" ? `<div class="msg user">${esc(m.content)}</div>` :
-    `<div class="msg bot"><div class="av">AI</div><div class="md">${md(m.content)}</div></div>`).join("");
+    `<div class="msg bot"><div class="av">PS</div><div class="md">${md(m.content)}</div></div>`).join("");
   box.scrollTop = box.scrollHeight;
 }
 async function ask(q) {
   q = (q || "").trim(); if (!q || S.chatBusy) return;
-  if (isBusy(S.meta) && S.meta.stages.transcript !== "done") { toast("Wait for the transcript to finish first", "err"); return; }
+  if (S.meta.stages?.transcript !== "done") { toast("Wait for the transcript to finish first", "err"); return; }
   S.chatBusy = true; $("#askBtn").disabled = true; $("#askInput").value = ""; autoGrow();
   if (!S.chat.length) $("#chat").innerHTML = "";
   S.chat.push({ role: "user", content: q });
   const box = $("#chat");
-  box.insertAdjacentHTML("beforeend", `<div class="msg user">${esc(q)}</div><div class="msg bot"><div class="av">AI</div><div class="md"><div class="thinking"><span class="spin"></span> Reading the session…</div></div></div>`);
+  box.insertAdjacentHTML("beforeend", `<div class="msg user">${esc(q)}</div><div class="msg bot"><div class="av">PS</div><div class="md"><div class="thinking"><span class="spin"></span> Reading the session</div></div></div>`);
   const out = box.lastElementChild.querySelector(".md");
   box.scrollTop = box.scrollHeight;
   let text = "", thinking = 0;
   try {
     const r = await fetch(`/api/sessions/${S.cur}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q }) });
-    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
     const reader = r.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for (;;) {
@@ -603,15 +955,14 @@ async function ask(q) {
         if (!line.trim()) continue;
         const ev = JSON.parse(line);
         if (ev.t === "content") { text += ev.d; out.innerHTML = md(text); }
-        else if (ev.t === "thinking") { thinking += ev.d.length; if (!text) out.innerHTML = `<div class="thinking"><span class="spin"></span> Thinking… (${thinking} chars)</div>`; }
+        else if (ev.t === "thinking") { thinking += ev.d.length; if (!text) out.innerHTML = `<div class="thinking"><span class="spin"></span> Thinking · ${thinking.toLocaleString()} characters</div>`; }
         else if (ev.t === "error") throw new Error(ev.d);
-        const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 140;
-        if (nearBottom) box.scrollTop = box.scrollHeight;
+        if (box.scrollHeight - box.scrollTop - box.clientHeight < 140) box.scrollTop = box.scrollHeight;
       }
     }
     S.chat.push({ role: "assistant", content: text });
   } catch (e) {
-    out.innerHTML = `<span class="err">⚠ ${esc(e.message)}</span>`;
+    out.innerHTML = `<span class="warn-text">${esc(e.message)}</span>`;
     S.chat.pop();
   } finally { S.chatBusy = false; $("#askBtn").disabled = false; }
 }
@@ -622,338 +973,283 @@ $("#askBtn").onclick = () => ask($("#askInput").value);
 $("#clearChat").onclick = async () => { if (!S.chat.length || !confirm("Clear this conversation?")) return; await api(`/api/sessions/${S.cur}/chat`, { method: "DELETE" }); S.chat = []; renderChat(); };
 
 // ------------------------------------------------------------------ polling
-let pollTimer = null;
+let pollTimer = null, polling = false, healthAt = 0, phoneAt = 0;
 async function poll() {
   clearTimeout(pollTimer);
+  if (polling) { pollTimer = setTimeout(poll, 400); return; }
+  polling = true;
   let fast = false;
   try {
     if (S.cur) {
       const prev = S.meta;
-      const m = await api(`/api/sessions/${S.cur}`);
-      if (m.id !== S.cur) return;
-      S.meta = m;
-      const busy = isBusy(m), rb = rbBusy(m);
-      fast = busy || rb;
-      const st = m.stages || {}, pst = prev?.stages || {};
-      if (st.transcript === "running" || (st.transcript === "done" && pst.transcript !== "done")) await loadTranscript();
-      if ((st.frames === "done" && pst.frames !== "done") || st.captions === "running" || (st.captions !== pst.captions)) await loadFrames();
-      if (st.summary === "done" && pst.summary !== "done") { await loadSummary(); if (S.tab === "transcript") renderTranscript(); }
-      if (rb || (prev && rbBusy(prev) && !rb)) await loadRunbook();
-      if (prev && rbBusy(prev) && !rb) {
-        if (m.runbook.state === "done") toast("Runbook ready", "ok"); else if (m.runbook.state === "error") toast("Runbook failed: " + m.runbook.error, "err");
+      const m = await api(`/api/sessions/${S.cur}`).catch(() => null);
+      if (m && m.id === S.cur) {
+        S.meta = m;
+        const g = m.stages || {}, pg = prev?.stages || {};
+        if (g.transcript === "running" || (g.transcript === "done" && pg.transcript !== "done")) await loadTranscript();
+        if ((g.frames === "done" && pg.frames !== "done") || g.captions === "running" || g.captions !== pg.captions) await loadFrames();
+        if (g.summary === "done" && pg.summary !== "done") { await loadSummary(); if (S.tab === "transcript") renderTranscript(); }
+        if (rbBusy(m) || (prev && rbBusy(prev))) await loadRunbook();
+        if (prev && rbBusy(prev) && !rbBusy(m)) m.runbook.state === "done" ? toast("KT document ready", "ok") : m.runbook.state === "error" && toast("KT document stopped: " + m.runbook.error, "err");
+        if (prev && invBusy(prev) && !invBusy(m)) { await loadInvite(); if (st(m, "invite") === "done") toast("Meeting invite ready", "ok"); else if (st(m, "invite") === "error") toast("Invite stopped: " + (m.invite.error || ""), "err"); }
+        if (prev && st(prev, "drive") !== st(m, "drive") && S.tab === "bundle" && S.bundle) renderBundle();
+        if (prev && st(prev, "drive") !== "done" && st(m, "drive") === "done") toast("Outputs copied to Google Drive", "ok");
+        if (prev && isBusy(prev) && !isBusy(m)) {
+          if (m.status === "ready") toast("Transcript, screenshots and summary ready", "ok"); else if (m.status === "error") toast("Stopped: " + m.error, "err");
+          await Promise.all([loadTranscript(), loadFrames(), loadSummary()]);
+        }
+        renderMeta();
+        if (S.tab === "runbook") renderRunbook();
+        if (S.tab === "invite" && invBusy(m)) renderInvite();
       }
-      if (prev && isBusy(prev) && !busy) {
-        if (m.status === "ready") toast("Processing complete", "ok"); else if (m.status === "error") toast("Processing failed: " + m.error, "err");
-        await Promise.all([loadTranscript(), loadFrames(), loadSummary()]);
-      }
-      renderMeta();
-      if (S.tab === "runbook") renderRunbook();
     }
     await loadSessions();
-    if (S.sessions.some((x) => isBusy(x) || rbBusy(x))) fast = true;
+    fast = S.sessions.some(anyBusy);
+    const now = Date.now();
+    if (now - phoneAt > (fast ? 8000 : 15000)) { phoneAt = now; await loadPhone(); }
+    if (now - healthAt > 30000) { healthAt = now; await checkHealth(); }
   } catch {}
-  pollTimer = setTimeout(poll, fast ? 1500 : 8000);
+  polling = false;
+  pollTimer = setTimeout(poll, fast ? 1500 : 6000);
 }
 
-// ------------------------------------------------------------------ new session
-let pickedFile = null, srcMode = "upload";
-function openNew(mode = "upload") {
-  pickedFile = null; $("#fileInput").value = ""; $("#pathInput").value = ""; $("#titleInput").value = ""; $("#newErr").textContent = "";
-  $("#dropLabel").innerHTML = `<b>Drop a recording here</b> or <a href="#" id="browse">browse</a>`;
-  $("#upProg").hidden = true; $("#startBtn").disabled = false;
-  $("#optVocab").value = S.settings.vocabulary || ""; $("#optSens").value = S.settings.frame_sensitivity || "medium";
-  $("#optLang").value = S.settings.language || "auto"; $("#optDescribe").checked = S.settings.describe_frames !== false;
-  setSrc(mode);
-  $("#newModal").hidden = false;
-}
-function setSrc(mode) {
-  srcMode = mode;
-  $$("#srcMode button").forEach((b) => b.classList.toggle("active", b.dataset.src === mode));
-  $("#srcUpload").hidden = mode !== "upload"; $("#srcPath").hidden = mode !== "path";
-  if (mode === "path") setTimeout(() => $("#pathInput").focus(), 50);
-}
-$("#srcMode").onclick = (e) => { const b = e.target.closest("button"); if (b) setSrc(b.dataset.src); };
-function pick(file) {
-  if (!file) return;
-  pickedFile = file;
-  $("#dropLabel").innerHTML = `<b>${esc(file.name)}</b> · ${(file.size / 1e6).toFixed(0)} MB &nbsp;<a href="#" id="browse">change</a>`;
-  if (!$("#titleInput").value) $("#titleInput").placeholder = file.name.replace(/\.[^.]+$/, "");
-}
-$("#newBtn").onclick = () => openNew();
-$("#welcomeBrowse").onclick = (e) => { e.preventDefault(); e.stopPropagation(); openNew(); $("#fileInput").click(); };
-$("#welcomePath").onclick = (e) => { e.preventDefault(); e.stopPropagation(); openNew("path"); };
-$("#welcomeDrop").onclick = () => { openNew(); $("#fileInput").click(); };
-$("#drop").onclick = (e) => { e.preventDefault(); $("#fileInput").click(); };
-$("#fileInput").onchange = (e) => pick(e.target.files[0]);
-for (const z of [$("#drop"), $("#welcomeDrop")]) {
-  z.addEventListener("dragover", (e) => { e.preventDefault(); z.classList.add("over"); });
-  z.addEventListener("dragleave", () => z.classList.remove("over"));
-  z.addEventListener("drop", (e) => {
-    e.preventDefault(); z.classList.remove("over");
-    const f = e.dataTransfer.files[0];
-    if (z.id === "welcomeDrop") openNew();
-    pick(f);
-  });
-}
-$("#startBtn").onclick = async () => {
-  $("#newErr").textContent = "";
-  const options = { language: $("#optLang").value, vocabulary: $("#optVocab").value, frame_sensitivity: $("#optSens").value, describe_frames: $("#optDescribe").checked };
-  const title = $("#titleInput").value.trim();
-  try {
-    let m;
-    if (srcMode === "path") {
-      const path = $("#pathInput").value.trim();
-      if (!path) { $("#newErr").textContent = "Enter the file path"; return; }
-      m = await api("/api/sessions/import", { method: "POST", body: { path, title, options } });
-    } else {
-      if (!pickedFile) { $("#newErr").textContent = "Choose a file first"; return; }
-      $("#startBtn").disabled = true; $("#upProg").hidden = false;
-      m = await upload(pickedFile, title, options);
-    }
-    $("#newModal").hidden = true;
-    await loadSessions(); openSession(m.id, "transcript"); poll();
-  } catch (e) { $("#newErr").textContent = e.message; $("#startBtn").disabled = false; }
-};
+// ------------------------------------------------------------------ adding a recording
 function upload(file, title, options) {
   return new Promise((resolve, reject) => {
     const x = new XMLHttpRequest();
     const q = new URLSearchParams({ filename: file.name, title, options: JSON.stringify(options) });
     x.open("POST", "/api/sessions/upload?" + q);
     const t0 = Date.now();
+    $("#upload").hidden = false; $("#upBar").style.width = "0";
     x.upload.onprogress = (e) => {
       if (!e.lengthComputable) return;
       const p = e.loaded / e.total, mbps = e.loaded / 1e6 / ((Date.now() - t0) / 1000 || 1);
       $("#upBar").style.width = (p * 100).toFixed(1) + "%";
-      $("#upText").textContent = `Copying into library… ${(p * 100).toFixed(0)}% · ${mbps.toFixed(0)} MB/s`;
+      $("#upText").textContent = `Copying ${file.name} · ${(p * 100).toFixed(0)}% · ${mbps.toFixed(0)} MB/s`;
     };
-    x.onload = () => (x.status < 300 ? resolve(JSON.parse(x.responseText)) : reject(new Error(JSON.parse(x.responseText || "{}").detail || "Upload failed")));
-    x.onerror = () => reject(new Error("Upload failed"));
+    x.onload = () => { $("#upload").hidden = true; x.status < 300 ? resolve(JSON.parse(x.responseText)) : reject(new Error(JSON.parse(x.responseText || "{}").detail || "Couldn't copy the file")); };
+    x.onerror = () => { $("#upload").hidden = true; reject(new Error("Couldn't copy the file")); };
     x.send(file);
   });
 }
+function nextOptions() {
+  const o = S.nextOptions, out = {};
+  if (o.language) out.language = o.language;
+  if (o.vocabulary) out.vocabulary = o.vocabulary;
+  if (o.frame_sensitivity) out.frame_sensitivity = o.frame_sensitivity;
+  return out;
+}
+async function started(m) {
+  S.nextOptions.title = ""; $("#pathInput").value = "";
+  toast(`Started “${m.title}”`, "ok");
+  await loadSessions(); poll();
+}
+async function addFile(file) {
+  if (!file) return;
+  try { await started(await upload(file, S.nextOptions.title, nextOptions())); }
+  catch (e) { toast(e.message, "err"); }
+}
+async function addPath() {
+  const path = $("#pathInput").value.trim().replace(/^"|"$/g, "");
+  if (!path) return $("#fileInput").click();
+  try { await started(await api("/api/sessions/import", { method: "POST", body: { path, title: S.nextOptions.title, options: nextOptions() } })); }
+  catch (e) { toast(e.message, "err"); }
+}
+$("#browseBtn").onclick = () => ($("#pathInput").value.trim() ? addPath() : $("#fileInput").click());
+$("#pathInput").addEventListener("keydown", (e) => { if (e.key === "Enter") addPath(); });
+$("#fileInput").onchange = (e) => { addFile(e.target.files[0]); e.target.value = ""; };
+$("#drop").addEventListener("click", (e) => { if (e.target !== $("#pathInput")) $("#fileInput").click(); });
+for (const z of [$("#drop"), document.body]) {
+  z.addEventListener("dragover", (e) => { if (!e.dataTransfer?.types.includes("Files")) return; e.preventDefault(); $("#drop").classList.add("over"); });
+  z.addEventListener("dragleave", (e) => { if (e.target === $("#drop") || e.target === document.body) $("#drop").classList.remove("over"); });
+  z.addEventListener("drop", (e) => {
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault(); e.stopPropagation(); $("#drop").classList.remove("over");
+    if (!$("#sessionSheet").hidden) return;
+    addFile(e.dataTransfer.files[0]);
+  });
+}
+$("#optionsBtn").onclick = () => {
+  const o = S.nextOptions;
+  $("#optTitle").value = o.title; $("#optLang").value = o.language || S.settings.language || "auto";
+  $("#optVocab").value = o.vocabulary || S.settings.vocabulary || "";
+  const v = o.frame_sensitivity || S.settings.frame_sensitivity || "medium";
+  $$("#optSens button").forEach((b) => b.classList.toggle("active", b.dataset.v === v));
+  $("#optDialog").showModal();
+};
+$("#optSens").onclick = (e) => { const b = e.target.closest("button"); if (b) $$("#optSens button").forEach((x) => x.classList.toggle("active", x === b)); };
+$("#optDialog").addEventListener("close", () => {
+  S.nextOptions = { title: $("#optTitle").value.trim(), language: $("#optLang").value, vocabulary: $("#optVocab").value.trim(),
+    frame_sensitivity: $("#optSens button.active")?.dataset.v || "" };
+  $("#optionsBtn").classList.toggle("set", !!S.nextOptions.title);
+});
 
 // ------------------------------------------------------------------ settings
-const SET_FIELDS = { sOllama: "ollama_url", sWriter: "writer_model", sAssistant: "assistant_model", sVision: "vision_model", sEffort: "writer_reasoning",
-  sCtx: "max_context", sEngine: "asr_engine", sWModel: "whisper_model", sBeam: "whisper_beam", sThreads: "whisper_threads", sWcppExe: "whispercpp_exe",
-  sWcppModel: "whispercpp_model", sVocab: "vocabulary", sSens: "frame_sensitivity", sMaxFrames: "max_frames", sTemplate: "runbook_template" };
-let DEFAULT_TPL = null;
+let savedTimer;
+async function saveSetting(key, value) { return saveSettings({ [key]: value }); }
+async function saveSettings(body) {
+  try {
+    S.settings = await api("/api/settings", { method: "PUT", body });
+    clearTimeout(savedTimer); $("#savedNote").textContent = "Saved"; $("#savedNote").classList.add("on");
+    savedTimer = setTimeout(() => $("#savedNote").classList.remove("on"), 1400);
+    return S.settings;
+  } catch (e) { toast("Couldn't save: " + e.message, "err"); }
+}
+const body = $("#settingsBody");
+function fillSettings() {
+  const s = S.settings;
+  $$("[data-key]", body).forEach((el) => {
+    if (el === document.activeElement) return;
+    const v = s[el.dataset.key];
+    if (el.type === "checkbox") el.checked = !!v; else if (el.tagName !== "SELECT" || !el.id.startsWith("s")) el.value = v ?? "";
+  });
+  $$("[data-segkey]", body).forEach((seg) => {
+    const v = String(s[seg.dataset.segkey] ?? "");
+    $$("button", seg).forEach((b) => b.classList.toggle("active", b.dataset.v === v));
+  });
+  $$("[data-prov]", body).forEach((el) => (el.hidden = el.dataset.prov !== (s.llm_provider || "ollama")));
+  $$("[data-asr]", body).forEach((el) => (el.hidden = el.dataset.asr !== s.asr_engine));
+  $("#anthropicKeyNote").textContent = s.anthropic_key_set ? "A key is saved. Paste a new one to replace it." : "No key saved yet.";
+  $("#openaiKeyNote").textContent = s.openai_key_set ? "A key is saved. Paste a new one to replace it." : "";
+  if (document.activeElement !== $("#phoneFolder")) $("#phoneFolder").value = s.phone_recordings_folder || "";
+  $("#folderNote").textContent = S.phone?.folderAvailable ? `Using ${S.phone.folder}` : s.phone_recordings_folder ? "That folder isn't reachable right now." : "Not found yet. Install Google Drive for desktop, or paste the folder here.";
+}
+function fillModels(models) {
+  const s = S.settings;
+  const opts = (sel, wantVision) => `<option value="">None</option>` + models.map((m) => {
+    const vis = m.capabilities?.includes("vision");
+    const tag = [m.size_gb ? m.size_gb + " GB" : "", vis ? "vision" : "", m.capabilities?.includes("thinking") ? "reasoning" : ""].filter(Boolean).join(" · ");
+    return `<option value="${esc(m.name)}" ${m.name === sel ? "selected" : ""} ${wantVision && !vis ? 'class="novis"' : ""}>${esc(m.name)}${tag ? " · " + tag : ""}</option>`;
+  }).join("") + (sel && !models.some((m) => m.name === sel) ? `<option value="${esc(sel)}" selected>${esc(sel)} (not found)</option>` : "");
+  $("#sWriter").innerHTML = opts(s.writer_model); $("#sAssistant").innerHTML = opts(s.assistant_model); $("#sVision").innerHTML = opts(s.vision_model, true);
+}
+async function loadModels(say) {
+  $("#testOut").innerHTML = '<span class="spin"></span> Connecting';
+  try {
+    const r = await api("/api/settings/models");
+    fillModels(r.models);
+    $("#testOut").textContent = `Connected · ${r.models.length} model${r.models.length === 1 ? "" : "s"}`;
+    if (say) checkHealth();
+  } catch (e) { fillModels([]); $("#testOut").innerHTML = `<span class="warn-text">${esc(e.message)}</span>`; }
+}
 async function openSettings() {
   await checkHealth();
-  const s = S.settings, h = S.health || {};
-  if (DEFAULT_TPL === null) DEFAULT_TPL = s.runbook_template;
-  const models = h.models || [];
-  const opts = (sel, vis) => `<option value="">— none —</option>` + models.map((m) => `<option value="${esc(m.name)}" ${m.name === sel ? "selected" : ""}>${esc(m.name)} · ${m.size_gb} GB${m.capabilities?.includes("vision") ? " · 👁 vision" : ""}${m.capabilities?.includes("thinking") ? " · reasoning" : ""}</option>`).join("") +
-    (sel && !models.some((m) => m.name === sel) ? `<option value="${esc(sel)}" selected>${esc(sel)} (not found)</option>` : "");
-  $("#sWriter").innerHTML = opts(s.writer_model); $("#sAssistant").innerHTML = opts(s.assistant_model); $("#sVision").innerHTML = opts(s.vision_model);
-  for (const [id, key] of Object.entries(SET_FIELDS)) { if (!["sWriter", "sAssistant", "sVision"].includes(id)) $("#" + id).value = s[key] ?? ""; }
-  $("#sDescribe").checked = !!s.describe_frames;
-  $("#ollamaPill").className = "pill " + (h.ollama ? "ok" : "err");
-  $("#ollamaPill").textContent = h.ollama ? `connected · ${models.length} models` : "not reachable";
-  $("#testOut").textContent = h.ollama ? "" : (h.ollama_error || "");
-  $("#wcppFields").hidden = $("#sEngine").value !== "whisper.cpp";
-  $("#settingsModal").hidden = false;
+  fillSettings(); fillModels(S.health?.models || []);
+  $("#testOut").textContent = S.health?.ollama ? `Connected · ${S.health.engine}` : S.health?.ollama_error || "";
+  openSheet($("#settingsSheet"));
+  try { S.defaults = await api("/api/settings/default-template"); } catch {}
 }
-$("#sEngine").onchange = () => ($("#wcppFields").hidden = $("#sEngine").value !== "whisper.cpp");
+function closeSettings() { closeSheet($("#settingsSheet")); checkHealth(); renderPhone(); }
 $("#settingsBtn").onclick = openSettings;
-let DEFAULT_TPL_TEXT = null;
-$("#resetTpl").onclick = () => { if (DEFAULT_TPL_TEXT) $("#sTemplate").value = DEFAULT_TPL_TEXT; };
-$("#saveSettings").onclick = async () => {
-  const body = {};
-  for (const [id, key] of Object.entries(SET_FIELDS)) body[key] = $("#" + id).value;
-  body.max_context = +body.max_context; body.whisper_beam = +body.whisper_beam; body.whisper_threads = +body.whisper_threads || 0; body.max_frames = +body.max_frames || 150;
-  body.describe_frames = $("#sDescribe").checked;
-  S.settings = await api("/api/settings", { method: "PUT", body });
-  $("#settingsModal").hidden = true; toast("Settings saved", "ok"); checkHealth();
-};
-$$("[data-test]").forEach((b) => (b.onclick = async () => {
-  const model = $("#" + b.dataset.test).value; if (!model) return;
-  $("#testOut").innerHTML = `<span class="spin"></span> Loading ${esc(model)}… (first load of a large model can take a minute)`;
-  try { const r = await api("/api/settings/test-model", { method: "POST", body: { model, role: b.dataset.role } }); $("#testOut").textContent = `✓ ${model} replied “${r.reply}” in ${r.seconds}s`; }
-  catch (e) { $("#testOut").innerHTML = `<span class="err">✗ ${esc(e.message)}</span>`; }
-}));
-
-$("#quitBtn").onclick = async () => {
-  const busy = S.sessions.some((x) => isBusy(x) || rbBusy(x));
-  if (!confirm(busy ? "A job is still running. Quit anyway? (You can resume it next time.)" : "Quit Pocket Scribe Desktop? This stops the background server.")) return;
-  if (S.rbDirty) await saveRunbook();
-  clearTimeout(pollTimer);
-  await fetch("/api/quit", { method: "POST" }).catch(() => {});
-  document.body.innerHTML = `<div style="height:100vh;display:grid;place-items:center;text-align:center;color:#b8c0d0;font:15px system-ui"><div><h2 style="color:#e7eaf1">Pocket Scribe Desktop has stopped</h2>You can close this tab. Open Pocket Scribe Desktop from the desktop shortcut to start it again.</div></div>`;
-};
-
-// ------------------------------------------------------------------ modals & keys
-$$(".modal").forEach((m) => {
-  m.addEventListener("click", (e) => { if (e.target === m || e.target.closest("[data-close]")) m.hidden = true; });
+const saveTextSoon = {};
+body.addEventListener("change", (e) => {
+  const el = e.target.closest("[data-key]"); if (!el) return;
+  const key = el.dataset.key;
+  if (el.type === "checkbox") { saveSetting(key, el.checked).then(() => { if (key === "animations") applyAnim(el.checked); if (key === "auto_process_phone") renderPhone(); }); return; }
+  if (el.tagName === "SELECT") { saveSetting(key, el.value); return; }
+  saveSetting(key, el.type === "number" ? +el.value : el.value);
 });
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") { $$(".modal").forEach((m) => (m.hidden = true)); $("#lightbox").hidden = true; $("#exportMenu").hidden = true; }
-  if ((e.ctrlKey || e.metaKey) && e.key === "s" && S.tab === "runbook") { e.preventDefault(); saveRunbook(); }
+body.addEventListener("input", (e) => {
+  const el = e.target.closest("[data-key]"); if (!el || el.tagName === "SELECT" || el.type === "checkbox") return;
+  const key = el.dataset.key;
+  (saveTextSoon[key] ||= debounce((v) => saveSetting(key, v), 800))(el.type === "number" ? +el.value : el.value);
 });
-window.addEventListener("beforeunload", (e) => { if (S.rbDirty) { saveRunbook(); e.preventDefault(); } });
-
-// ------------------------------------------------------------------ boot
-(async function boot() {
-  try { DEFAULT_TPL_TEXT = (await api("/api/settings/default-template").catch(() => null))?.template || null; } catch {}
-  await checkHealth();
-  await loadSessions();
-  const id = location.hash.slice(1);
-  if (id && S.sessions.some((s) => s.id === id)) openSession(id);
-  else if (S.sessions.length) openSession(S.sessions[0].id);
-  poll();
-  setInterval(checkHealth, 30000);
-})();
-
-const phoneInbox = $("#phoneInbox");
-let phoneInboxData = null;
-let phoneInboxRequest = null;
-let phoneProcessing = null;
-const phoneStates = {
-  available: "Ready to process", syncing: "Waiting for Drive sync", queued: "Queued",
-  running: "Processing", ready: "Processed", error: "Needs attention", cancelled: "Processing stopped",
-};
-
-function phoneError(message = "") {
-  $("#phoneInboxError").textContent = message;
-  $("#phoneInboxError").hidden = !message;
-}
-
-function renderPhoneInbox() {
-  const inbox = phoneInboxData;
-  const unread = inbox?.recordings.filter((r) => r.state === "available").length || 0;
-  $("#phoneInboxCount").textContent = unread;
-  $("#phoneInboxCount").hidden = !unread;
-  if (!phoneInbox.open) return;
-
-  const folderStatus = $("#phoneFolderStatus");
-  const list = $("#phoneRecordingList");
-  const focused = list.contains(document.activeElement) ? document.activeElement.dataset.recording : null;
-  list.replaceChildren();
-  folderStatus.textContent = inbox?.folderAvailable ? inbox.folder
-    : inbox?.folder ? "Drive folder unavailable" : "Connect Google Drive";
-  if (!inbox?.recordings.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = inbox?.folderAvailable
-      ? "No phone recordings yet. Save a recording in Pocket Scribe and it will appear here after Drive sync."
-      : inbox ? "Open Google Drive for desktop on this PC, or choose the Pocket Scribe folder." : "Checking for recordings…";
-    list.append(empty);
+body.addEventListener("click", async (e) => {
+  const sb = e.target.closest("[data-segkey] button");
+  if (sb) {
+    const seg = sb.parentElement, key = seg.dataset.segkey;
+    const v = seg.hasAttribute("data-num") ? +sb.dataset.v : sb.dataset.v;
+    $$("button", seg).forEach((b) => b.classList.toggle("active", b === sb));
+    await saveSetting(key, v);
+    if (key === "llm_provider") { fillSettings(); loadModels(true); }
+    if (key === "asr_engine") fillSettings();
+    if (key === "theme") applyTheme(v);
     return;
   }
-
-  for (const rec of inbox.recordings) {
-    const row = document.createElement("div");
-    const info = document.createElement("div");
-    const title = document.createElement("strong");
-    const details = document.createElement("p");
-    const date = new Date(rec.startedAt);
-    const parts = [rec.mode === "audio_only" ? "Audio" : "Audio + video"];
-    if (Number.isFinite(date.getTime())) parts.unshift(date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }));
-    if (rec.durationMs > 0) parts.push(ts(rec.durationMs / 1000));
-    parts.push(phoneStates[rec.state] || "Imported");
-    row.className = "phone-recording";
-    info.className = "phone-recording-info";
-    title.textContent = rec.title;
-    details.className = "small muted";
-    details.textContent = parts.join(" · ");
-    info.append(title, details);
-    row.append(info);
-    if (rec.sessionId || rec.state === "available") {
-      const button = document.createElement("button");
-      button.className = rec.sessionId ? "btn" : "btn primary";
-      button.dataset.recording = rec.id;
-      button.textContent = rec.sessionId ? "Open session" : phoneProcessing === rec.id ? "Importing…" : "Process";
-      button.disabled = !rec.sessionId && phoneProcessing !== null;
-      button.setAttribute("aria-label", button.textContent + " " + rec.title);
-      button.onclick = () => openPhoneRecording(rec);
-      row.append(button);
-    }
-    list.append(row);
+  const kb2 = e.target.closest("[data-savekey]");
+  if (kb2) {
+    const f = kb2.dataset.savekey, input = f === "anthropic_key" ? $("#anthropicKey") : $("#openaiKey");
+    const v = input.value.trim();
+    if (f === "anthropic_key" && v && !v.startsWith("sk-ant-")) { toast("A Claude key starts with sk-ant-", "err"); return; }
+    await saveSetting(f, v); input.value = "";
+    toast(v ? "Key saved and encrypted" : "Key removed", "ok");
+    fillSettings(); loadModels(true);
+    return;
   }
-  if (focused) list.querySelector('[data-recording="' + focused + '"]')?.focus({ preventScroll: true });
-}
-
-async function refreshPhoneInbox() {
-  if (phoneInboxRequest) return phoneInboxRequest;
-  phoneInboxRequest = (async () => {
-    try {
-      const next = await api("/api/phone-recordings");
-      if (JSON.stringify(next) !== JSON.stringify(phoneInboxData)) {
-        phoneInboxData = next;
-        renderPhoneInbox();
-      }
-    } catch (e) {
-      if (phoneInbox.open) phoneError(e.message);
-    } finally {
-      phoneInboxRequest = null;
-    }
-  })();
-  return phoneInboxRequest;
-}
-
-async function openPhoneRecording(rec) {
-  phoneError();
-  try {
-    let id = rec.sessionId;
-    if (!id) {
-      if (phoneProcessing) return;
-      phoneProcessing = rec.id;
-      renderPhoneInbox();
-      const session = await api("/api/phone-recordings/" + rec.id + "/process", { method: "POST", body: {} });
-      id = session.id;
-      await loadSessions();
-    }
-    phoneInbox.close();
-    await openSession(id, "transcript");
-    poll();
-  } catch (e) {
-    phoneError(e.message);
-  } finally {
-    if (phoneProcessing === rec.id) {
-      phoneProcessing = null;
-      renderPhoneInbox();
-      await refreshPhoneInbox();
-    }
+  const tb = e.target.closest("[data-test]");
+  if (tb) {
+    const model = $("#" + tb.dataset.test).value;
+    if (!model) { $("#testOut").textContent = "Pick a model first."; return; }
+    $("#testOut").innerHTML = `<span class="spin"></span> Asking ${esc(model)}`;
+    try { const r = await api("/api/settings/test-model", { method: "POST", body: { model } }); $("#testOut").textContent = `${model} replied “${r.reply}” in ${r.seconds} s`; }
+    catch (err) { $("#testOut").innerHTML = `<span class="warn-text">${esc(err.message)}</span>`; }
+    return;
   }
-}
-
-$("#phoneInboxBtn").onclick = () => {
-  phoneError();
-  phoneInbox.showModal();
-  renderPhoneInbox();
-  refreshPhoneInbox();
-};
-$("#closePhoneInbox").onclick = () => phoneInbox.close();
-$("#refreshPhoneInbox").onclick = () => {
-  phoneError();
-  refreshPhoneInbox();
-};
-$("#editPhoneFolder").onclick = () => {
-  const form = $("#phoneFolderForm");
-  form.hidden = !form.hidden;
-  $("#editPhoneFolder").setAttribute("aria-expanded", String(!form.hidden));
-  if (!form.hidden) {
-    $("#phoneFolder").value = phoneInboxData?.folder || "";
-    $("#phoneFolder").focus();
+  const rb = e.target.closest("[data-reset]");
+  if (rb) {
+    const key = rb.dataset.reset, v = S.defaults[key];
+    if (!v || !confirm("Put back the original text? Your changes are replaced.")) return;
+    $(`[data-key="${key}"]`, body).value = v; await saveSetting(key, v); toast("Reset", "ok");
   }
-};
-$("#phoneFolderForm").onsubmit = async (event) => {
-  event.preventDefault();
-  phoneError();
-  const button = event.submitter;
-  button.disabled = true;
+});
+$("#loadModelsBtn").onclick = () => loadModels(true);
+$("#saveFolderBtn").onclick = async () => {
   try {
     await api("/api/phone-recordings/folder", { method: "PUT", body: { folder: $("#phoneFolder").value } });
-    $("#phoneFolderForm").hidden = true;
-    $("#editPhoneFolder").setAttribute("aria-expanded", "false");
-    $("#editPhoneFolder").focus();
-    await phoneInboxRequest;
-    await refreshPhoneInbox();
-  } catch (e) {
-    phoneError(e.message);
-  } finally {
-    button.disabled = false;
-  }
+    S.settings = await api("/api/settings");
+    await loadPhone(); fillSettings(); toast("Folder saved", "ok");
+  } catch (e) { $("#folderNote").innerHTML = `<span class="warn-text">${esc(e.message)}</span>`; }
+};
+$("#quitBtn").onclick = async () => {
+  if (!confirm("Quit Pocket Scribe? Work in progress stops and resumes next time you open it.")) return;
+  await api("/api/quit", { method: "POST" }).catch(() => {});
+  document.body.innerHTML = `<div class="quit-msg"><b>Pocket Scribe has stopped.</b><span>Open it again from the desktop shortcut.</span></div>`;
 };
 
-refreshPhoneInbox();
-setInterval(refreshPhoneInbox, 20000);
+// ------------------------------------------------------------------ info
+function renderInfo() {
+  const h = S.health || {};
+  $("#infoBody").innerHTML = `
+  <div class="card set"><h3><i class="dot"></i>How it works</h3>
+    <div class="how3">
+      <div><b>1 · Record on the phone</b>Open Pocket Scribe on the phone, point it at the screen, and tap Record. It keeps recording with the screen off.</div>
+      <div><b>2 · It syncs through Google Drive</b>When you stop, the phone uploads the recording to My Drive › Pocket Scribe. Google Drive for desktop brings it to this PC.</div>
+      <div><b>3 · This PC does the rest</b>Speech to text, screenshots of every screen change, a summary, the KT document, a meeting invite and a bundle for Claude.</div>
+    </div></div>
+  <div class="card set"><h3><i class="dot"></i>What you get for each session</h3>
+    <dl class="kv">
+      <dt>Transcript</dt><dd>Every word with times. Select any line to jump the video there. Double-click to correct a word, or fix one everywhere with Find & replace.</dd>
+      <dt>Screenshots</dt><dd>Kept each time the shared screen changes, with a short description. Webcam-only frames are hidden.</dd>
+      <dt>KT document</dt><dd>A step-by-step document written from the transcript and screenshots. Edit it, then export Word, PDF or Markdown.</dd>
+      <dt>Meeting invite</dt><dd>A follow-up meeting: subject, agenda, who to invite, what to prepare. Copy it, or open the .ics in Outlook.</dd>
+      <dt>Claude bundle</dt><dd>A .zip with a brief, the transcript, the KT document and the screenshots. Give it to Claude to build the automation you saw.</dd>
+      <dt>Ask</dt><dd>Ask questions about the session. Answers point to the moment it was said.</dd>
+    </dl></div>
+  <div class="card set"><h3><i class="dot"></i>The steps on each card</h3>
+    <div class="rail big legend"><span class="node done"><i></i>Done</span><span class="line done"></span><span class="node running"><i></i>Working</span><span class="line"></span><span class="node turn"><i></i>Your turn</span><span class="line"></span><span class="node pending"><i></i>Not yet</span><span class="line"></span><span class="node error"><i></i>Stopped</span></div>
+    <p class="help">A session moves along Audio, Transcript, Screenshots, Summary, KT document and Invite. Your turn means it's waiting for you to start that step.</p></div>
+  <div class="card set"><h3><i class="dot"></i>Privacy</h3>
+    <p>Recordings, transcripts and screenshots stay on this PC and in your own Google Drive. Speech to text always runs here.
+    With Ollama or vLLM the AI runs on your own machines too. Only if you choose Claude in Settings do transcripts and screenshots go to Anthropic to write the outputs.</p></div>
+  <div class="card set"><h3><i class="dot"></i>Shortcuts</h3>
+    <dl class="kv small"><dt>Esc</dt><dd>Close the open panel</dd><dt>Enter in the path box</dt><dd>Add that file</dd><dt>Enter in transcript search</dt><dd>Next match (Shift for previous)</dd><dt>Shift+Enter in Ask</dt><dd>New line</dd></dl></div>
+  <div class="card set"><h3><i class="dot"></i>This PC</h3>
+    <dl class="kv small">
+      <dt>AI</dt><dd>${esc(h.engine || "Unknown")} · ${h.ollama ? "connected" : "not reachable"}</dd>
+      <dt>Models</dt><dd>Writer ${esc(S.settings.writer_model || "none")} · Assistant ${esc(S.settings.assistant_model || "none")} · Vision ${esc(S.settings.vision_model || "none")}</dd>
+      <dt>Drive folder</dt><dd>${esc(h.drive_folder || "Not found")}</dd>
+      <dt>ffmpeg</dt><dd>${h.ffmpeg ? "Ready" : "Missing"}</dd>
+      <dt>Address</dt><dd>${esc(location.origin)}</dd>
+    </dl></div>`;
+}
+$("#infoBtn").onclick = async () => { await checkHealth(); renderInfo(); openSheet($("#infoSheet")); };
+
+// ------------------------------------------------------------------ start
+(async function init() {
+  await checkHealth();
+  await Promise.all([loadSessions(), loadPhone()]);
+  healthAt = phoneAt = Date.now();
+  const id = location.hash.slice(1);
+  if (id && S.sessions.some((m) => m.id === id)) openSession(id);
+  poll();
+})();

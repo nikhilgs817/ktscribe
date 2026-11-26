@@ -60,6 +60,9 @@ def create(title: str, video_path: str, options: dict, copied: bool, *,
         "stages": {s: "pending" for s in STAGES},
         "options": options,
         "runbook": {"state": "none", "chars": 0, "error": None, "updated": None},
+        "invite": {"state": "none", "error": None},
+        "drive": {"state": "none", "error": None, "path": ""},
+        "bundle_goal": "",
     }
     try:
         if staged_source is not None:
@@ -91,8 +94,8 @@ def update(sid: str, **fields) -> dict:
         for k, v in fields.items():
             if k == "stages":
                 meta["stages"].update(v)
-            elif k == "runbook":
-                meta["runbook"].update(v)
+            elif k in ("runbook", "invite", "drive"):
+                meta.setdefault(k, {}).update(v)
             else:
                 meta[k] = v
         _write(sdir(sid) / "meta.json", meta)
@@ -152,7 +155,8 @@ def recover_interrupted():
                            message="Interrupted")
             stages = {k: ("pending" if v == "running" else v) for k, v in m["stages"].items()}
             changes["stages"] = stages
-        if m.get("runbook", {}).get("state") in ("running", "queued"):
-            changes["runbook"] = {"state": "error", "error": "Interrupted. Generate again."}
+        for part in ("runbook", "invite", "drive"):
+            if (m.get(part) or {}).get("state") in ("running", "queued"):
+                changes[part] = {"state": "error", "error": "Interrupted. Try again."}
         if changes:
             update(m["id"], **changes)

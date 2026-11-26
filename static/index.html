@@ -1,294 +1,381 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pocket Scribe Desktop</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c8cff'/%3E%3Cpath d='M9 11h14M9 16h10M9 21h7' stroke='white' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/app.css?v=pocket-scribe">
+<title>Pocket Scribe</title>
+<link rel="icon" href="/static/icon.svg">
+<link rel="stylesheet" href="/static/app.css?v=3">
+<script>
+  // apply the saved theme before first paint so the page never flashes
+  try {
+    const t = localStorage.getItem("ps-theme") || "system";
+    const dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    if (localStorage.getItem("ps-anim") === "off") document.documentElement.classList.add("no-anim");
+  } catch {}
+</script>
 </head>
 <body>
-<div class="app">
-  <!-- ============ Sidebar ============ -->
-  <aside class="sidebar">
-    <div class="brand">
-      <div class="logo"><svg viewBox="0 0 32 32"><path d="M9 11h14M9 16h10M9 21h7"/></svg></div>
-      <div><div class="brand-name">Pocket Scribe Desktop</div><div class="brand-sub">Local · Private</div></div>
-    </div>
-    <button class="btn primary block" id="newBtn"><span class="i">＋</span> New session</button>
-    <button class="btn block" id="phoneInboxBtn">Phone recordings <span class="pill" id="phoneInboxCount" hidden></span></button>
-    <div class="side-search"><input id="sessionFilter" placeholder="Search sessions…"></div>
-    <div class="session-list" id="sessionList"></div>
-    <div class="side-foot">
-      <div class="sys" id="sysStatus"><span class="dot"></span><span>Checking…</span></div>
-      <button class="icon-btn" id="settingsBtn" title="Settings">⚙</button>
-      <button class="icon-btn danger" id="quitBtn" title="Quit Pocket Scribe Desktop (stops the background server)">⏻</button>
-    </div>
-  </aside>
+<div class="page" id="page">
 
-  <!-- ============ Main ============ -->
-  <main class="main">
-    <!-- Welcome -->
-    <section id="welcome" class="welcome">
-      <div class="welcome-inner">
-        <h1>Turn a KT recording into a transcript, a runbook and answers.</h1>
-        <p class="muted">Everything runs on this PC — Whisper for speech, your Ollama models for writing. Nothing leaves your machine.</p>
-        <div class="drop big" id="welcomeDrop">
-          <div class="drop-icon">⬆</div>
-          <div><b>Drop a video or audio file here</b></div>
-          <div class="muted small">MP4, MKV, WEBM, MOV, MP3, WAV, M4A… or <a href="#" id="welcomeBrowse">browse</a> · <a href="#" id="welcomePath">use a file path</a></div>
-        </div>
-        <div class="steps">
-          <div class="step"><span>1</span><div><b>Transcript</b><p>Timestamped, searchable, click any line to jump the video.</p></div></div>
-          <div class="step"><span>2</span><div><b>Screenshots</b><p>Captured automatically each time the shared screen changes.</p></div></div>
-          <div class="step"><span>3</span><div><b>Runbook</b><p>Structured doc with screenshots. Edit, then export DOCX / PDF.</p></div></div>
-          <div class="step"><span>4</span><div><b>Ask</b><p>Chat with the session. Answers cite the moment it was said.</p></div></div>
-        </div>
+  <!-- ================= header ================= -->
+  <header class="head">
+    <img class="logo" src="/static/icon.svg" alt="">
+    <div class="head-text">
+      <h1>Pocket Scribe</h1>
+      <p>Record on your phone. Get the transcript, screenshots, KT document and meeting invite here.</p>
+    </div>
+    <span class="pill" id="sysPill"><i></i><span>CHECKING</span></span>
+    <button class="round" id="themeBtn" title="Light or dark" aria-label="Switch light or dark mode">
+      <svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg>
+      <svg class="moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+    </button>
+    <button class="round" id="infoBtn" title="How it works" aria-label="How it works"><b class="i-glyph">i</b></button>
+    <button class="round" id="settingsBtn" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.5 7.5 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.5 7.5 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.5 7.5 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.5 7.5 0 0 0 2.6-1.5l2.4 1 2-3.4z"/></svg>
+    </button>
+  </header>
+
+  <!-- ================= add a recording ================= -->
+  <section class="card input-card" id="dropCard">
+    <div class="drop" id="drop">
+      <svg viewBox="0 0 24 24"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/></svg>
+      <div class="drop-text">
+        <b>Drop a recording here</b>
+        <span>MP4, MKV, MOV, WEBM, MP3, M4A, WAV. Or paste a file path and press Enter.</span>
       </div>
-    </section>
+      <input id="pathInput" placeholder="C:\Users\you\Videos\cert-renewal-kt.mp4" spellcheck="false" autocomplete="off">
+    </div>
+    <div class="input-actions">
+      <button class="btn primary" id="browseBtn">Add recording</button>
+      <button class="btn" id="optionsBtn">Options</button>
+    </div>
+    <input type="file" id="fileInput" accept="video/*,audio/*,.mkv" hidden>
+  </section>
 
-    <!-- Session -->
-    <section id="sessionView" class="session" hidden>
-      <header class="sv-head">
-        <div class="sv-title-wrap">
-          <h2 id="svTitle" class="sv-title" contenteditable="true" spellcheck="false"></h2>
-          <div class="sv-meta" id="svMeta"></div>
-        </div>
-        <div class="sv-actions">
-          <button class="btn ghost" id="focusBtn" title="Hide video to give the document more room">⇤ Focus</button>
-          <div class="menu-wrap">
-            <button class="btn" id="exportBtn">Export ▾</button>
-            <div class="menu" id="exportMenu" hidden></div>
-          </div>
-          <button class="icon-btn danger" id="deleteBtn" title="Delete session">🗑</button>
-        </div>
-      </header>
-      <div class="progress-strip" id="progressStrip" hidden>
-        <div class="stage-pills" id="stagePills"></div>
-        <div class="bar"><div id="progressBar"></div></div>
-        <div class="progress-row">
-          <span id="progressMsg" class="muted small"></span>
+  <!-- ================= phone / Drive strip ================= -->
+  <section class="card strip" id="phoneStrip">
+    <span class="chip" id="phoneChip"><i></i><span>PHONE</span></span>
+    <div class="strip-text">
+      <b id="phoneTitle">Phone recordings</b>
+      <span id="phoneSub">Looking for the Pocket Scribe folder in Google Drive…</span>
+    </div>
+    <label class="switch" title="Start new phone recordings by themselves"><input type="checkbox" id="autoToggle"><span></span><em>Auto</em></label>
+    <button class="btn" id="phoneCheckBtn">Check now</button>
+  </section>
+
+  <!-- ================= problem banner ================= -->
+  <section class="card strip banner" id="banner" hidden>
+    <span class="chip warn" id="bannerChip"><i></i><span>CHECK</span></span>
+    <div class="strip-text" id="bannerText"></div>
+    <button class="btn" id="bannerAction" hidden></button>
+    <button class="btn" id="bannerDismiss">Dismiss</button>
+  </section>
+
+  <!-- ================= sessions ================= -->
+  <div class="list-head">
+    <h2>Sessions</h2>
+    <span class="counts" id="counts"></span>
+    <span class="spacer"></span>
+    <input class="search" id="search" placeholder="Search" aria-label="Search sessions">
+  </div>
+  <section class="list" id="list" aria-live="polite"></section>
+
+  <!-- ================= action bar ================= -->
+  <footer class="card actionbar" id="actionbar">
+    <span id="actionText">Add a recording, or record on your phone.</span>
+    <span class="spacer"></span>
+    <button class="btn primary" id="actionBtn" hidden></button>
+  </footer>
+</div>
+
+<!-- ================= session sheet ================= -->
+<section class="sheet session" id="sessionSheet" hidden aria-labelledby="svTitle">
+  <header class="sheet-head">
+    <button class="btn back" id="backBtn" aria-label="Back to sessions">‹ Sessions</button>
+    <div class="sv-title-wrap">
+      <h2 id="svTitle" class="sv-title" contenteditable="true" spellcheck="false"></h2>
+      <div class="sv-meta" id="svMeta"></div>
+    </div>
+    <span class="badge" id="svBadge"></span>
+    <div class="menu-wrap">
+      <button class="btn" id="exportBtn">Export ▾</button>
+      <div class="menu" id="exportMenu" hidden></div>
+    </div>
+    <button class="round danger" id="deleteBtn" title="Delete session" aria-label="Delete session">
+      <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5"/></svg>
+    </button>
+  </header>
+  <div class="card sv-progress" id="svProgress">
+    <div class="rail big" id="svRail"></div>
+    <div class="progress-row">
+      <span id="progressMsg"></span>
+      <span class="spacer"></span>
+      <button class="btn sm" id="cancelBtn" hidden>Stop</button>
+      <button class="btn sm primary" id="resumeBtn" hidden>Resume</button>
+    </div>
+  </div>
+  <div class="card strip banner" id="warnBanner" hidden></div>
+
+  <div class="sv-body" id="svBody">
+    <div class="media-col">
+      <div class="card player">
+        <video id="video" controls preload="metadata"></video>
+        <div class="player-msg" id="playerMsg" hidden></div>
+      </div>
+      <div class="player-tools">
+        <button class="btn sm" id="captureBtn" title="Save the current frame as a screenshot">Capture frame</button>
+        <label class="switch small"><input type="checkbox" id="followToggle" checked><span></span><em>Follow</em></label>
+        <span class="spacer"></span>
+        <select id="rateSel" class="sm" title="Playback speed"><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>1.75</option><option>2</option></select>
+      </div>
+      <div class="card chapters">
+        <div class="card-h"><i class="dot"></i>Chapters</div>
+        <div id="chapterList" class="chapter-list"></div>
+      </div>
+    </div>
+
+    <div class="card content-col">
+      <nav class="tabs" id="tabs" role="tablist">
+        <button data-tab="overview" class="active">Overview</button>
+        <button data-tab="transcript">Transcript</button>
+        <button data-tab="runbook">KT document</button>
+        <button data-tab="frames">Screenshots <span class="count" id="frameCount"></span></button>
+        <button data-tab="invite">Meeting invite</button>
+        <button data-tab="bundle">Claude bundle</button>
+        <button data-tab="ask">Ask</button>
+      </nav>
+
+      <div class="pane" data-pane="overview" id="overviewPane"></div>
+
+      <div class="pane" data-pane="transcript" hidden>
+        <div class="toolbar">
+          <input class="search" id="tSearch" placeholder="Search transcript"><span id="tSearchCount" class="muted small"></span>
+          <button class="btn sm" id="replaceToggle" title="Fix a misheard word everywhere">Find & replace</button>
           <span class="spacer"></span>
-          <button class="btn sm ghost" id="cancelBtn">Cancel</button>
-          <button class="btn sm" id="resumeBtn" hidden>Resume</button>
+          <span class="muted small" id="tStats"></span>
+        </div>
+        <div class="replace-row" id="replaceRow" hidden>
+          <input id="rFind" placeholder="Find (e.g. cert bot)"><input id="rWith" placeholder="Replace with (e.g. certbot)">
+          <label class="switch small"><input type="checkbox" id="rWhole" checked><span></span><em>Whole word</em></label>
+          <button class="btn sm primary" id="rGo">Replace all</button>
+        </div>
+        <div class="transcript" id="transcript"></div>
+      </div>
+
+      <div class="pane" data-pane="runbook" hidden>
+        <div class="toolbar">
+          <button class="btn sm primary" id="genBtn">Write KT document</button>
+          <div class="seg" id="rbMode"><button data-mode="edit">Edit</button><button data-mode="split">Split</button><button data-mode="preview" class="active">Preview</button></div>
+          <button class="btn sm" id="insertShotBtn">Insert screenshot</button>
+          <button class="btn sm" id="restoreBtn" hidden title="Swap back to the version before the last one">Previous version</button>
+          <span class="spacer"></span>
+          <span class="muted small" id="rbSaved"></span>
+        </div>
+        <div class="gen-panel" id="genPanel" hidden>
+          <textarea id="genInstr" rows="2" placeholder="Optional: “Audience is the on-call team. Focus on the renewal steps and the rollback.”"></textarea>
+          <div class="gen-row"><span class="muted small" id="genModel"></span><span class="spacer"></span>
+            <button class="btn sm" id="genCancelPanel">Close</button><button class="btn sm primary" id="genGo">Write it</button></div>
+        </div>
+        <div class="rb-status" id="rbStatus" hidden></div>
+        <div class="runbook mode-preview" id="runbookWrap">
+          <textarea id="rbEditor" spellcheck="true" placeholder="The KT document appears here. You can also write or paste Markdown."></textarea>
+          <article id="rbPreview" class="md"></article>
         </div>
       </div>
-      <div class="banner warn" id="warnBanner" hidden></div>
 
-      <div class="sv-body" id="svBody">
-        <div class="media-col">
-          <div class="player">
-            <video id="video" controls preload="metadata"></video>
-            <div class="player-msg" id="playerMsg" hidden></div>
-          </div>
-          <div class="player-tools">
-            <button class="btn sm" id="captureBtn" title="Save the current video frame as a screenshot">📸 Capture frame</button>
-            <label class="toggle small"><input type="checkbox" id="followToggle" checked> Follow transcript</label>
-            <span class="spacer"></span>
-            <select id="rateSel" class="sm" title="Playback speed"><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>1.75</option><option>2</option></select>
-          </div>
-          <div class="card chapters">
-            <div class="card-h">Chapters</div>
-            <div id="chapterList" class="chapter-list"><div class="muted small pad">Appear after the summary is written.</div></div>
-          </div>
+      <div class="pane" data-pane="frames" hidden>
+        <div class="toolbar">
+          <span class="muted small" id="frameInfo"></span>
+          <label class="switch small"><input type="checkbox" id="showHidden"><span></span><em>Show hidden & webcam</em></label>
+          <span class="spacer"></span>
+          <div class="seg" id="sensSeg"><button data-v="low">Fewer</button><button data-v="medium">Normal</button><button data-v="high">More</button></div>
+          <button class="btn sm" id="redetectBtn" title="Find screen changes again">Find again</button>
+          <button class="btn sm" id="recaptionBtn" title="Describe every screenshot again">Describe all</button>
         </div>
-
-        <div class="content-col">
-          <nav class="tabs" id="tabs">
-            <button data-tab="overview" class="active">Overview</button>
-            <button data-tab="transcript">Transcript</button>
-            <button data-tab="runbook">Runbook</button>
-            <button data-tab="frames">Screenshots <span class="count" id="frameCount"></span></button>
-            <button data-tab="ask">Ask</button>
-          </nav>
-
-          <!-- Overview -->
-          <div class="pane" data-pane="overview" id="overviewPane"></div>
-
-          <!-- Transcript -->
-          <div class="pane" data-pane="transcript" hidden>
-            <div class="toolbar">
-              <div class="search"><input id="tSearch" placeholder="Search transcript…"><span id="tSearchCount" class="muted small"></span></div>
-              <button class="btn sm ghost" id="replaceToggle" title="Fix misheard words everywhere">Find & replace</button>
-              <span class="spacer"></span>
-              <span class="muted small" id="tStats"></span>
-            </div>
-            <div class="replace-row" id="replaceRow" hidden>
-              <input id="rFind" placeholder="Find (e.g. cloud watch)"><input id="rWith" placeholder="Replace with (e.g. CloudWatch)">
-              <label class="toggle small"><input type="checkbox" id="rWhole" checked> Whole word</label>
-              <button class="btn sm primary" id="rGo">Replace all</button>
-            </div>
-            <div class="transcript" id="transcript"></div>
-          </div>
-
-          <!-- Runbook -->
-          <div class="pane" data-pane="runbook" hidden>
-            <div class="toolbar">
-              <button class="btn sm primary" id="genBtn">✨ Generate</button>
-              <div class="seg" id="rbMode">
-                <button data-mode="edit">Edit</button><button data-mode="split">Split</button><button data-mode="preview" class="active">Preview</button>
-              </div>
-              <button class="btn sm ghost" id="insertShotBtn">🖼 Insert screenshot</button>
-              <button class="btn sm ghost" id="restoreBtn" hidden title="Swap back to the version before the last generation">↶ Previous version</button>
-              <span class="spacer"></span>
-              <span class="muted small" id="rbSaved"></span>
-            </div>
-            <div class="gen-panel" id="genPanel" hidden>
-              <textarea id="genInstr" rows="2" placeholder="Optional instructions, e.g. “Focus on deployment and monitoring. Audience: L2 support. Add a section on DR.”"></textarea>
-              <div class="gen-row"><span class="muted small" id="genModel"></span><span class="spacer"></span>
-                <button class="btn sm ghost" id="genCancelPanel">Close</button><button class="btn sm primary" id="genGo">Generate runbook</button></div>
-            </div>
-            <div class="rb-status" id="rbStatus" hidden></div>
-            <div class="runbook mode-preview" id="runbookWrap">
-              <textarea id="rbEditor" spellcheck="true" placeholder="The runbook appears here. You can also write or paste Markdown."></textarea>
-              <article id="rbPreview" class="md"></article>
-            </div>
-          </div>
-
-          <!-- Screenshots -->
-          <div class="pane" data-pane="frames" hidden>
-            <div class="toolbar">
-              <span class="muted small" id="frameInfo"></span>
-              <label class="toggle small"><input type="checkbox" id="showHidden"> Show hidden & webcam</label>
-              <span class="spacer"></span>
-              <select id="sensSel" class="sm" title="Screenshot sensitivity for Re-detect"><option value="low">Low sensitivity</option><option value="medium">Medium sensitivity</option><option value="high">High sensitivity</option></select>
-              <button class="btn sm ghost" id="redetectBtn" title="Detect screen changes again with the chosen sensitivity">↻ Re-detect</button>
-              <button class="btn sm ghost" id="recaptionBtn" title="Describe all screenshots again with the vision model">✨ Re-describe all</button>
-            </div>
-            <div class="frame-grid" id="frameGrid"></div>
-          </div>
-
-          <!-- Ask -->
-          <div class="pane ask" data-pane="ask" hidden>
-            <div class="chat" id="chat"></div>
-            <div class="chat-input">
-              <textarea id="askInput" rows="1" placeholder="Ask anything about this session… (Enter to send, Shift+Enter for new line)"></textarea>
-              <button class="btn primary" id="askBtn">Send</button>
-            </div>
-            <div class="chat-foot"><span class="muted small" id="askModel"></span><span class="spacer"></span><button class="link-btn small" id="clearChat">Clear chat</button></div>
-          </div>
-        </div>
+        <div class="frame-grid" id="frameGrid"></div>
       </div>
-    </section>
-  </main>
-</div>
 
-<!-- ============ New session modal ============ -->
-<div class="modal" id="newModal" hidden>
-  <div class="modal-card wide">
-    <div class="modal-h"><h3>New session</h3><button class="icon-btn" data-close>✕</button></div>
-    <div class="seg full" id="srcMode"><button data-src="upload" class="active">Upload file</button><button data-src="path">Use file on this PC</button></div>
-    <div id="srcUpload">
-      <div class="drop" id="drop">
-        <div class="drop-icon">⬆</div>
-        <div id="dropLabel"><b>Drop a recording here</b> or <a href="#" id="browse">browse</a></div>
-        <div class="muted small">The file is copied into Pocket Scribe Desktop's library.</div>
+      <div class="pane" data-pane="invite" hidden id="invitePane"></div>
+      <div class="pane" data-pane="bundle" hidden id="bundlePane"></div>
+
+      <div class="pane ask" data-pane="ask" hidden>
+        <div class="chat" id="chat"></div>
+        <div class="chat-input">
+          <textarea id="askInput" rows="1" placeholder="Ask anything about this session. Enter sends, Shift+Enter adds a line."></textarea>
+          <button class="btn primary" id="askBtn">Send</button>
+        </div>
+        <div class="chat-foot"><span class="muted small" id="askModel"></span><span class="spacer"></span><button class="link-btn small" id="clearChat">Clear chat</button></div>
       </div>
-      <input type="file" id="fileInput" accept="video/*,audio/*,.mkv" hidden>
     </div>
-    <div id="srcPath" hidden>
-      <label class="field"><span>Full path to the file</span><input id="pathInput" placeholder="C:\Users\you\Videos\KT_payments_app.mp4"></label>
-      <div class="muted small">Tip: in File Explorer, Shift + right-click the file → “Copy as path”. The file isn't copied — keep it where it is.</div>
-    </div>
-    <label class="field"><span>Title <em>(optional — AI will suggest one)</em></span><input id="titleInput" placeholder="e.g. Payments app KT with Ravi"></label>
-    <details class="opts">
-      <summary>Options</summary>
-      <div class="grid2">
-        <label class="field"><span>Language</span>
-          <select id="optLang"><option value="auto">Auto-detect</option><option value="en">English</option><option value="hi">Hindi</option><option value="te">Telugu</option><option value="ta">Tamil</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option></select></label>
-        <label class="field"><span>Screenshot sensitivity</span>
-          <select id="optSens"><option value="low">Low — major screen changes only</option><option value="medium" selected>Medium</option><option value="high">High — catch small changes</option></select></label>
+  </div>
+</section>
+
+<!-- ================= info sheet ================= -->
+<section class="sheet doc" id="infoSheet" hidden aria-labelledby="infoTitle">
+  <header class="sheet-head">
+    <button class="btn back" data-close>‹ Back</button>
+    <div class="sv-title-wrap"><h2 id="infoTitle">How it works</h2><div class="sv-meta">Every feature, how the phone and PC work together, and what to do when something doesn't arrive.</div></div>
+  </header>
+  <div class="doc-body" id="infoBody"></div>
+</section>
+
+<!-- ================= settings sheet ================= -->
+<section class="sheet doc" id="settingsSheet" hidden aria-labelledby="setTitle">
+  <header class="sheet-head">
+    <button class="btn back" data-close>‹ Back</button>
+    <div class="sv-title-wrap"><h2 id="setTitle">Settings</h2><div class="sv-meta">Changes save as you make them.</div></div>
+    <span class="muted small" id="savedNote"></span>
+  </header>
+  <div class="doc-body settings" id="settingsBody">
+
+    <div class="card set">
+      <h3><i class="dot"></i>AI models</h3>
+      <p class="help">Pocket Scribe writes the summary, KT document and invite with your own models. Nothing leaves this PC unless you choose Claude.</p>
+      <div class="step">1 · How to connect AI</div>
+      <div class="seg wide" data-segkey="llm_provider"><button data-v="ollama">Ollama</button><button data-v="openai">vLLM / OpenAI-compatible</button><button data-v="anthropic">Claude (cloud)</button></div>
+      <div data-prov="ollama">
+        <div class="step">2 · Ollama address</div>
+        <input data-key="ollama_url" placeholder="http://127.0.0.1:11434">
+        <p class="help">Ollama on this PC uses the default. For Ollama on another machine, use its address, for example http://192.168.1.20:11434.</p>
       </div>
-      <label class="field"><span>Vocabulary hints <em>(names, products, acronyms — improves accuracy)</em></span><textarea id="optVocab" rows="2"></textarea></label>
-      <label class="toggle"><input type="checkbox" id="optDescribe" checked> Describe screenshots with the vision model</label>
-    </details>
-    <div class="upload-progress" id="upProg" hidden><div class="bar"><div id="upBar"></div></div><span class="small muted" id="upText"></span></div>
-    <div class="modal-f"><span class="err small" id="newErr"></span><span class="spacer"></span><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="startBtn">Start processing</button></div>
-  </div>
-</div>
-
-<!-- ============ Settings modal ============ -->
-<div class="modal" id="settingsModal" hidden>
-  <div class="modal-card wide tall">
-    <div class="modal-h"><h3>Settings</h3><button class="icon-btn" data-close>✕</button></div>
-    <div class="settings-body">
-      <section>
-        <h4>Local AI models <span class="pill" id="ollamaPill"></span></h4>
-        <label class="field"><span>Ollama URL</span><input id="sOllama"></label>
-        <div class="model-row"><label class="field"><span>Writer — runbooks & documents</span><select id="sWriter"></select></label><button class="btn sm ghost" data-test="sWriter" data-role="writer">Test</button></div>
-        <div class="model-row"><label class="field"><span>Assistant — summary, chapters, Q&A</span><select id="sAssistant"></select></label><button class="btn sm ghost" data-test="sAssistant" data-role="assistant">Test</button></div>
-        <div class="model-row"><label class="field"><span>Vision — describes screenshots (needs an image-capable model)</span><select id="sVision"></select></label><button class="btn sm ghost" data-test="sVision" data-role="vision">Test</button></div>
-        <div class="grid2">
-          <label class="field"><span>Writer reasoning effort (gpt-oss)</span><select id="sEffort"><option>low</option><option>medium</option><option>high</option></select></label>
-          <label class="field"><span>Max context (tokens)</span><select id="sCtx"><option>32768</option><option>65536</option><option>131072</option></select></label>
-        </div>
-        <div class="small muted" id="testOut"></div>
-      </section>
-      <section>
-        <h4>Speech to text</h4>
-        <div class="grid2">
-          <label class="field"><span>Engine</span><select id="sEngine"><option value="faster-whisper">faster-whisper (CPU — works out of the box)</option><option value="whisper.cpp">whisper.cpp (Vulkan GPU — AMD/Intel/NVIDIA)</option></select></label>
-          <label class="field"><span>Whisper model</span><select id="sWModel"><option value="large-v3-turbo">large-v3-turbo — best speed/accuracy</option><option value="large-v3">large-v3 — most accurate, slower</option><option value="distil-large-v3.5">distil-large-v3.5 — English, fast</option><option value="medium">medium</option><option value="small">small — fastest</option></select></label>
-          <label class="field"><span>Beam size</span><select id="sBeam"><option value="5">5 — accurate</option><option value="1">1 — faster</option></select></label>
-          <label class="field"><span>CPU threads (0 = auto)</span><input id="sThreads" type="number" min="0" max="64"></label>
-        </div>
-        <div id="wcppFields">
-          <label class="field"><span>whisper-cli.exe path</span><input id="sWcppExe" placeholder="C:\tools\whisper.cpp\whisper-cli.exe"></label>
-          <label class="field"><span>ggml model path</span><input id="sWcppModel" placeholder="C:\tools\whisper.cpp\models\ggml-large-v3-turbo.bin"></label>
-        </div>
-      </section>
-      <section>
-        <h4>Defaults for new sessions</h4>
-        <label class="field"><span>Vocabulary hints</span><textarea id="sVocab" rows="2"></textarea></label>
-        <div class="grid2">
-          <label class="field"><span>Screenshot sensitivity</span><select id="sSens"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
-          <label class="field"><span>Max screenshots per session</span><input id="sMaxFrames" type="number" min="10" max="500"></label>
-        </div>
-        <label class="toggle"><input type="checkbox" id="sDescribe"> Describe screenshots with the vision model</label>
-      </section>
-      <section>
-        <h4>Runbook template <button class="link-btn small" id="resetTpl">Reset to default</button></h4>
-        <textarea id="sTemplate" rows="12" class="mono"></textarea>
-      </section>
+      <div data-prov="openai">
+        <div class="step">2 · Server address</div>
+        <input data-key="openai_url" placeholder="http://127.0.0.1:8000/v1">
+        <p class="help">The vLLM server's address ending in /v1. LM Studio (http://127.0.0.1:1234/v1) and llama.cpp server work too.</p>
+        <div class="step">API key (only if your server asks for one)</div>
+        <div class="key-row"><input type="password" id="openaiKey" placeholder="Leave blank for no key" autocomplete="off"><button class="btn sm" data-savekey="openai_key">Save key</button></div>
+        <p class="help" id="openaiKeyNote"></p>
+      </div>
+      <div data-prov="anthropic">
+        <div class="step">2 · Claude API key</div>
+        <div class="key-row"><input type="password" id="anthropicKey" placeholder="sk-ant-…" autocomplete="off"><button class="btn sm" data-savekey="anthropic_key">Save key</button></div>
+        <p class="help" id="anthropicKeyNote"></p>
+        <p class="help">Create a key at console.anthropic.com › API keys. Usage is billed to that Anthropic account. The key is encrypted with Windows for your user and never shown again.</p>
+        <p class="help warn-text">With Claude, each session's transcript and screenshots go to Anthropic to write the outputs. Speech-to-text still runs on this PC.</p>
+      </div>
+      <div class="step">3 · Models</div>
+      <div class="model-row"><label>Writer <em>KT document</em></label><select data-key="writer_model" id="sWriter"></select><button class="btn sm" data-test="sWriter">Test</button></div>
+      <div class="model-row"><label>Assistant <em>summary, invite, Ask</em></label><select data-key="assistant_model" id="sAssistant"></select><button class="btn sm" data-test="sAssistant">Test</button></div>
+      <div class="model-row"><label>Vision <em>reads screenshots</em></label><select data-key="vision_model" id="sVision"></select><button class="btn sm" data-test="sVision">Test</button></div>
+      <div class="row-gap"><button class="btn" id="loadModelsBtn">Test & load models</button><span class="help" id="testOut"></span></div>
+      <div class="step">How hard the writer thinks</div>
+      <div class="seg" data-segkey="writer_reasoning"><button data-v="low">Quick</button><button data-v="medium">Balanced</button><button data-v="high">Thorough</button></div>
+      <div class="step">Longest input the models take</div>
+      <div class="seg" data-segkey="max_context" data-num><button data-v="32768">32K</button><button data-v="65536">64K</button><button data-v="131072">128K</button></div>
+      <p class="help">Longer sessions are condensed in parts first. Match this to the context your server was started with.</p>
     </div>
-    <div class="modal-f"><span class="spacer"></span><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="saveSettings">Save</button></div>
-  </div>
-</div>
 
-<!-- ============ Screenshot picker ============ -->
-<div class="modal" id="pickModal" hidden>
-  <div class="modal-card wide tall">
-    <div class="modal-h"><h3>Insert screenshot</h3><button class="icon-btn" data-close>✕</button></div>
-    <div class="frame-grid picker" id="pickGrid"></div>
-  </div>
-</div>
-
-<dialog id="phoneInbox" class="modal-card wide phone-inbox" aria-labelledby="phoneInboxTitle">
-  <div class="modal-h"><h3 id="phoneInboxTitle">Phone recordings</h3><button class="icon-btn" id="closePhoneInbox" aria-label="Close phone recordings">✕</button></div>
-  <div class="phone-inbox-toolbar">
-    <p class="small muted" id="phoneFolderStatus"></p>
-    <button class="btn small" id="refreshPhoneInbox">Refresh</button>
-    <button class="btn small" id="editPhoneFolder" aria-controls="phoneFolderForm" aria-expanded="false">Drive folder</button>
-  </div>
-  <form id="phoneFolderForm" class="phone-folder-form" hidden>
-    <label for="phoneFolder">Google Drive folder on this PC</label>
-    <p class="small muted">Paste the Pocket Scribe folder path from File Explorer. Leave it blank to find the folder automatically.</p>
-    <div class="phone-folder-input">
-      <input id="phoneFolder" type="text" placeholder="G:\My Drive\Pocket Scribe" spellcheck="false" autocomplete="off">
-      <button class="btn primary" type="submit">Save folder</button>
+    <div class="card set">
+      <h3><i class="dot"></i>Phone & Google Drive</h3>
+      <p class="help">The phone uploads each finished recording to the Pocket Scribe folder in your Google Drive. Google Drive for desktop syncs it to this PC, and Pocket Scribe picks it up from there.</p>
+      <div class="step">1 · Pocket Scribe folder on this PC</div>
+      <div class="key-row"><input id="phoneFolder" placeholder="Found automatically, e.g. G:\My Drive\Pocket Scribe" spellcheck="false"><button class="btn sm" id="saveFolderBtn">Save folder</button></div>
+      <p class="help" id="folderNote"></p>
+      <div class="step">2 · When a recording arrives</div>
+      <label class="switch"><input type="checkbox" data-key="auto_process_phone"><span></span><em>Start processing it by itself</em></label>
+      <div class="step">Check for new recordings every</div>
+      <div class="seg" data-segkey="phone_poll_seconds" data-num><button data-v="30">30 s</button><button data-v="60">1 min</button><button data-v="300">5 min</button></div>
+      <div class="step">3 · When outputs are ready</div>
+      <label class="switch"><input type="checkbox" data-key="drive_outputs"><span></span><em>Copy them to Pocket Scribe › Outputs in Drive</em></label>
+      <p class="help">Each session gets a folder with the KT document (Word), the invite (.txt and .ics) and the Claude bundle (.zip), so you can open them from the phone or another PC.</p>
     </div>
-  </form>
-  <p class="small err" id="phoneInboxError" role="alert" hidden></p>
-  <div class="phone-recordings" id="phoneRecordingList"></div>
+
+    <div class="card set">
+      <h3><i class="dot"></i>Automatic outputs</h3>
+      <p class="help">After the transcript and summary, Pocket Scribe can go on by itself. You can always run each one again from the session.</p>
+      <label class="switch"><input type="checkbox" data-key="auto_kt_doc"><span></span><em>Write the KT document</em></label>
+      <label class="switch"><input type="checkbox" data-key="auto_invite"><span></span><em>Draft a follow-up meeting invite</em></label>
+      <div class="step">Invite length</div>
+      <div class="seg" data-segkey="invite_duration" data-num><button data-v="15">15 min</button><button data-v="30">30 min</button><button data-v="45">45 min</button><button data-v="60">60 min</button></div>
+      <label class="switch"><input type="checkbox" data-key="bundle_skip_webcam"><span></span><em>Leave webcam shots out of the Claude bundle</em></label>
+    </div>
+
+    <div class="card set">
+      <h3><i class="dot"></i>Screenshots</h3>
+      <p class="help">A screenshot is kept each time the shared screen changes. Webcam-only frames are recognised and hidden.</p>
+      <div class="step">How many to keep</div>
+      <div class="seg" data-segkey="frame_sensitivity"><button data-v="low">Fewer: big changes only</button><button data-v="medium">Normal</button><button data-v="high">More: small changes too</button></div>
+      <div class="step">At most, per session</div>
+      <div class="seg" data-segkey="max_frames" data-num><button data-v="60">60</button><button data-v="150">150</button><button data-v="300">300</button></div>
+      <label class="switch"><input type="checkbox" data-key="describe_frames"><span></span><em>Describe each screenshot with the vision model</em></label>
+    </div>
+
+    <div class="card set">
+      <h3><i class="dot"></i>Speech to text</h3>
+      <p class="help">Whisper runs on this PC. The first session downloads the model once (about 1.6 GB).</p>
+      <div class="step">Engine</div>
+      <div class="seg" data-segkey="asr_engine"><button data-v="faster-whisper">faster-whisper (CPU)</button><button data-v="whisper.cpp">whisper.cpp (GPU)</button></div>
+      <div class="step">Model</div>
+      <select data-key="whisper_model">
+        <option value="large-v3-turbo">large-v3-turbo: best speed for its accuracy</option>
+        <option value="large-v3">large-v3: most accurate, slower</option>
+        <option value="distil-large-v3.5">distil-large-v3.5: English only, fast</option>
+        <option value="medium">medium</option><option value="small">small: fastest</option>
+      </select>
+      <div class="step">Accuracy</div>
+      <div class="seg" data-segkey="whisper_beam" data-num><button data-v="1">Faster</button><button data-v="5">More accurate</button></div>
+      <div class="step">Language</div>
+      <select data-key="language">
+        <option value="auto">Detect by itself</option><option value="en">English</option><option value="hi">Hindi</option><option value="te">Telugu</option>
+        <option value="ta">Tamil</option><option value="kn">Kannada</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option>
+      </select>
+      <div class="step">Words it should know</div>
+      <textarea data-key="vocabulary" rows="2" placeholder="Names, products, acronyms"></textarea>
+      <div data-asr="whisper.cpp">
+        <div class="step">whisper-cli.exe</div><input data-key="whispercpp_exe" placeholder="C:\tools\whisper.cpp\whisper-cli.exe">
+        <div class="step">ggml model file</div><input data-key="whispercpp_model" placeholder="C:\tools\whisper.cpp\models\ggml-large-v3-turbo.bin">
+      </div>
+      <div class="step">CPU threads (0 = all)</div><input data-key="whisper_threads" type="number" min="0" max="64">
+    </div>
+
+    <div class="card set">
+      <h3><i class="dot"></i>Templates</h3>
+      <div class="step">KT document outline <button class="link-btn small" data-reset="runbook_template">Reset</button></div>
+      <textarea data-key="runbook_template" rows="10" class="mono"></textarea>
+      <div class="step">Meeting invite instructions <button class="link-btn small" data-reset="invite_instructions">Reset</button></div>
+      <textarea data-key="invite_instructions" rows="3"></textarea>
+      <div class="step">Brief for Claude <button class="link-btn small" data-reset="claude_brief">Reset</button></div>
+      <textarea data-key="claude_brief" rows="10" class="mono"></textarea>
+      <p class="help">{goal} is replaced by what you type in each session's Claude bundle tab.</p>
+    </div>
+
+    <div class="card set">
+      <h3><i class="dot"></i>Appearance</h3>
+      <div class="step">Theme</div>
+      <div class="seg" data-segkey="theme"><button data-v="system">Same as Windows</button><button data-v="light">Light</button><button data-v="dark">Dark</button></div>
+      <label class="switch"><input type="checkbox" data-key="animations"><span></span><em>Animations</em></label>
+      <div class="step">Pocket Scribe</div>
+      <button class="btn" id="quitBtn">Quit Pocket Scribe</button>
+      <p class="help">Stops the app in the background. Open it again from the desktop shortcut.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= options (next recording) ================= -->
+<dialog class="card dialog" id="optDialog">
+  <h3><i class="dot"></i>Options for the next recording</h3>
+  <div class="step">Title</div><input id="optTitle" placeholder="Leave blank and the AI names it">
+  <div class="step">Language</div>
+  <select id="optLang"><option value="auto">Detect by itself</option><option value="en">English</option><option value="hi">Hindi</option><option value="te">Telugu</option><option value="ta">Tamil</option><option value="kn">Kannada</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option></select>
+  <div class="step">Screenshots</div>
+  <div class="seg" id="optSens"><button data-v="low">Fewer</button><button data-v="medium">Normal</button><button data-v="high">More</button></div>
+  <div class="step">Words it should know</div><textarea id="optVocab" rows="2"></textarea>
+  <div class="dialog-f"><span class="spacer"></span><button class="btn primary" data-close>Done</button></div>
 </dialog>
 
+<dialog class="card dialog wide" id="pickDialog">
+  <h3><i class="dot"></i>Insert a screenshot</h3>
+  <div class="frame-grid picker" id="pickGrid"></div>
+  <div class="dialog-f"><span class="spacer"></span><button class="btn" data-close>Close</button></div>
+</dialog>
 
-<!-- ============ Lightbox ============ -->
+<div class="upload card" id="upload" hidden><div class="bar"><div id="upBar"></div></div><span id="upText"></span></div>
 <div class="lightbox" id="lightbox" hidden><img id="lightImg" alt=""><div id="lightCap"></div></div>
-
 <div class="toasts" id="toasts"></div>
 
 <script src="/static/vendor/marked.min.js"></script>
-<script src="/static/app.js?v=pocket-scribe-desktop"></script>
+<script src="/static/app.js?v=3"></script>
 </body>
 </html>

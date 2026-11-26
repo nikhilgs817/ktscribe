@@ -63,6 +63,24 @@ class PhoneInboxTests(unittest.TestCase):
         rows = {r["id"]: r for r in main.list_phone_recordings()["recordings"]}
         self.assertEqual(rows[video_id]["sessionId"], session["id"])
 
+    def test_auto_process_starts_only_new_finished_recordings(self):
+        old = "66666666-6666-6666-6666-666666666666"
+        self.recording(old)
+        with patch.object(main.pipeline, "enqueue") as enqueue:
+            self.assertEqual(main.auto_import_once(), [])  # first run only marks the starting point
+            self.assertTrue(config.load()["auto_process_since"])
+            config.save({"auto_process_since": "2026-11-21T00:00:00Z"})
+            started = main.auto_import_once()
+            self.assertEqual(len(started), 1)
+            self.assertEqual(main.auto_import_once(), [])  # never twice
+            config.save({"auto_process_since": "2026-12-01T00:00:00Z"})
+            new = "77777777-7777-7777-7777-777777777777"
+            self.recording(new)
+            self.assertEqual(main.auto_import_once(), [])  # started before the cut-off
+            config.save({"auto_process_phone": False, "auto_process_since": "2026-01-01T00:00:00Z"})
+            self.assertEqual(main.auto_import_once(), [])
+            enqueue.assert_called_once_with("process", started[0])
+
     def test_partial_and_corrupt_sync_never_starts_processing(self):
         ident = "44444444-4444-4444-4444-444444444444"
         media = self.recording(ident)

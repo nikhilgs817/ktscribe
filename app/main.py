@@ -10,7 +10,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, exporters, llm, media, phone_inbox, pipeline, prompts, store
+from . import config, exporters, llm, media, outputs, phone_inbox, pipeline, prompts, store
 
 STATIC = config.ROOT / "static"
 VIDEO_EXT = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg", ".ts",
@@ -24,6 +24,7 @@ def _startup():
     config.ensure_dirs()
     store.recover_interrupted()
     pipeline.start_worker()
+    threading.Thread(target=_phone_watcher, daemon=True, name="phone-watcher").start()
 
 
 def _meta(sid):
@@ -46,21 +47,23 @@ def _llm_err(_, exc):
 @app.get("/api/health")
 def health():
     s = config.load()
-    out = {"ffmpeg": False, "ollama": False, "models": [], "worker": pipeline.current()}
+    out = {"ffmpeg": False, "ollama": False, "models": [], "worker": pipeline.current(),
+           "provider": llm.provider(s), "engine": llm.describe(s)}
     try:
         media.ffmpeg_exe()
         out["ffmpeg"] = True
     except Exception as e:
         out["ffmpeg_error"] = str(e)
     try:
-        out["models"] = llm.list_models(s["ollama_url"])
+        out["models"] = llm.list_models(s)
         out["ollama"] = True
         upd = llm.auto_assign(s, out["models"])
         if upd:
             config.save(upd)
     except Exception as e:
         out["ollama_error"] = str(e)
-    out["settings"] = config.load()
+    out["settings"] = config.public(config.load())
+    out["drive_folder"] = str(phone_inbox.folder() or "")
     return out
 
 
@@ -74,25 +77,37 @@ def quit_app():
 
 @app.get("/api/settings")
 def get_settings():
-    return config.load()
+    return config.public(config.load())
 
 
 @app.put("/api/settings")
 def put_settings(body: dict = Body(...)):
-    return config.save(body)
+    body.pop("auto_process_since", None)
+    provider_changed = "llm_provider" in body and body["llm_provider"] != config.load().get("llm_provider")
+    if provider_changed:
+        # model names differ between engines; let the next health check pick fresh ones
+        body.update({k: body.get(k, "") for k in ("writer_model", "assistant_model", "vision_model")})
+    return config.public(config.save(body))
+
+
+@app.get("/api/settings/models")
+def settings_models():
+    s = config.load()
+    return {"provider": llm.provider(s), "models": llm.list_models(s)}
 
 
 @app.get("/api/settings/default-template")
 def default_template():
-    return {"template": config.DEFAULT_RUNBOOK_TEMPLATE}
+    return {"template": config.DEFAULT_RUNBOOK_TEMPLATE, "runbook_template": config.DEFAULT_RUNBOOK_TEMPLATE,
+            "invite_instructions": config.DEFAULT_INVITE_INSTRUCTIONS, "claude_brief": config.DEFAULT_CLAUDE_BRIEF}
 
 
 @app.post("/api/settings/test-model")
 def test_model(body: dict = Body(...)):
     s = config.load()
     t0 = time.time()
-    txt = llm.chat_text(s["ollama_url"], body["model"], [{"role": "user", "content": "Reply with exactly: OK"}],
-                        role=body.get("role", "assistant"), num_ctx=2048, max_tokens=200)
+    txt = llm.chat_text(s, body["model"], [{"role": "user", "content": "Reply with exactly: OK"}],
+                        role="assistant", num_ctx=2048, max_tokens=200)
     return {"reply": txt.strip()[:200], "seconds": round(time.time() - t0, 1)}
 
 
@@ -149,13 +164,12 @@ def set_phone_folder(body: dict = Body(...)):
     return {"folder": value}
 
 
-@app.post("/api/phone-recordings/{recording_id}/process")
-def process_phone_recording(recording_id: str, body: dict = Body(...)):
+def _import_phone(recording_id: str, directory: Path | None = None) -> dict:
     with _phone_import_lock:
         for session in store.list_all():
             if session.get("phone_recording_id") == recording_id:
                 return session
-        directory = phone_inbox.folder()
+        directory = directory or phone_inbox.folder()
         try:
             rec = phone_inbox.scan(directory).get(recording_id) if directory else None
         except OSError:
@@ -177,6 +191,58 @@ def process_phone_recording(recording_id: str, body: dict = Body(...)):
             staged.unlink(missing_ok=True)
         pipeline.enqueue("process", meta["id"])
         return meta
+
+
+@app.post("/api/phone-recordings/{recording_id}/process")
+def process_phone_recording(recording_id: str, body: dict = Body(default={})):
+    return _import_phone(recording_id)
+
+
+def auto_import_once() -> list[str]:
+    """Start every phone recording that finished syncing since auto-processing was switched on."""
+    s = config.load()
+    if not s.get("auto_process_phone"):
+        return []
+    since = s.get("auto_process_since") or ""
+    if not since:
+        # first run: don't flood the queue with old recordings; start from now
+        since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        config.save({"auto_process_since": since})
+        return []
+    directory = phone_inbox.folder()
+    if directory is None:
+        return []
+    try:
+        recordings = phone_inbox.scan(directory)
+    except OSError:
+        return []
+    known = {m.get("phone_recording_id") for m in store.list_all()}
+    started = []
+    for rec in recordings.values():
+        if rec.id in known or not rec.available() or _iso(rec.started_at) < _iso(since):
+            continue
+        try:
+            started.append(_import_phone(rec.id, directory)["id"])
+        except HTTPException:
+            continue
+    return started
+
+
+def _iso(value: str) -> float:
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _phone_watcher():
+    while True:
+        try:
+            auto_import_once()
+        except Exception:
+            pass
+        time.sleep(max(15, int(config.load().get("phone_poll_seconds") or 60)))
 
 
 
@@ -231,7 +297,9 @@ def session(sid: str):
 def patch_session(sid: str, body: dict = Body(...)):
     _meta(sid)
     if "title" in body:
-        return store.update(sid, title=body["title"].strip()[:200] or "Untitled", title_auto=False)
+        store.update(sid, title=body["title"].strip()[:200] or "Untitled", title_auto=False)
+    if "bundle_goal" in body:
+        store.update(sid, bundle_goal=str(body["bundle_goal"])[:4000])
     return _meta(sid)
 
 
@@ -396,7 +464,7 @@ def describe_frame(sid: str, fid: str):
         raise HTTPException(404)
     segs = store.read_json(sid, "transcript.json", {}).get("segments", [])
     img = pipeline._jpeg_b64(store.frames_dir(sid) / f"{fid}.jpg")
-    cap = llm.chat_text(s["ollama_url"], s["vision_model"], [{"role": "user", "images": [img],
+    cap = llm.chat_text(s, s["vision_model"], [{"role": "user", "images": [img],
                         "content": prompts.CAPTION_PROMPT.format(time=prompts.ts(f["t"]),
                         context=pipeline._context_around(segs, f["t"]))}],
                         role="vision", num_ctx=8192, max_tokens=160, temperature=0.1).strip()
@@ -456,6 +524,67 @@ def restore_runbook(sid: str):
     return {"text": prev}
 
 
+# ----------------------------------------------------------------------------- invite, Claude bundle, Drive
+
+@app.get("/api/sessions/{sid}/invite")
+def get_invite(sid: str):
+    m = _meta(sid)
+    return {"invite": store.read_json(sid, "invite.json", None), "status": m.get("invite") or {"state": "none"}}
+
+
+@app.put("/api/sessions/{sid}/invite")
+def put_invite(sid: str, body: dict = Body(...)):
+    _meta(sid)
+    inv = store.read_json(sid, "invite.json", {}) or {}
+    for k in ("subject", "body"):
+        if k in body:
+            inv[k] = str(body[k])
+    store.write_json(sid, "invite.json", inv)
+    return inv
+
+
+@app.post("/api/sessions/{sid}/invite/generate")
+def gen_invite(sid: str):
+    m = _meta(sid)
+    if not store.read_json(sid, "transcript.json", {}).get("segments"):
+        raise HTTPException(400, "Transcript isn't ready yet")
+    if (m.get("invite") or {}).get("state") in ("running", "queued"):
+        raise HTTPException(409, "Already drafting")
+    store.update(sid, invite={"state": "queued", "error": None})
+    pipeline.enqueue("invite", sid)
+    return {"ok": True}
+
+
+@app.get("/api/sessions/{sid}/bundle")
+def bundle_preview(sid: str):
+    m = _meta(sid)
+    files = outputs.bundle_files(sid, config.load())
+    return {"goal": m.get("bundle_goal", ""), "brief": files["BRIEF.md"].decode(),
+            "files": [{"name": k, "bytes": len(v)} for k, v in files.items()]}
+
+
+@app.post("/api/sessions/{sid}/drive")
+def to_drive(sid: str):
+    _meta(sid)
+    if outputs.drive_outputs_dir() is None:
+        raise HTTPException(400, "Google Drive folder not found. Set it in Settings > Phone & Google Drive.")
+    store.update(sid, drive={"state": "queued", "error": None})
+    pipeline.enqueue("drive", sid)
+    return {"ok": True}
+
+
+@app.post("/api/sessions/{sid}/drive/open")
+def open_drive_folder(sid: str):
+    m = _meta(sid)
+    path = (m.get("drive") or {}).get("path") or ""
+    if not path or not Path(path).is_dir():
+        raise HTTPException(404, "The Drive copy isn't there yet.")
+    import os
+    if hasattr(os, "startfile"):
+        os.startfile(path)  # type: ignore[attr-defined]
+    return {"path": path}
+
+
 # ----------------------------------------------------------------------------- exports
 
 def _safe_name(s):
@@ -487,6 +616,18 @@ def export(sid: str, what: str, fmt: str):
             raise HTTPException(400, "Runbook is empty")
     elif what == "summary":
         body = f"# {title}\n\n" + exporters.summary_md(summ)
+    elif what == "invite":
+        inv = store.read_json(sid, "invite.json", None)
+        if not inv:
+            raise HTTPException(400, "No meeting invite yet")
+        if fmt == "ics":
+            return Response(outputs.invite_ics(inv, sid), media_type="text/calendar; charset=utf-8",
+                            headers={"Content-Disposition": f'attachment; filename="{name}"'})
+        body = outputs.invite_text(inv)
+    elif what == "bundle" and fmt == "zip":
+        data = outputs.bundle_zip(sid, config.load())
+        return Response(data, media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{_safe_name(title)}_claude_bundle.zip"'})
     else:
         raise HTTPException(404)
 
@@ -558,7 +699,7 @@ def chat(sid: str, body: dict = Body(...)):
             msgs.append({"role": "user", "content": q})
             prompt_tokens = sum(llm.est_tokens(x["content"]) for x in msgs)
             answer = []
-            for kind, chunk in llm.chat(s["ollama_url"], model, msgs, role="assistant",
+            for kind, chunk in llm.chat(s, model, msgs, role="assistant",
                                         num_ctx=llm.ctx_for(prompt_tokens, 3000, int(s.get("max_context", 65536))),
                                         max_tokens=3000, temperature=0.2):
                 if kind == "content":
