@@ -15,7 +15,7 @@
         android:dataExtractionRules="@xml/data_extraction_rules" android:fullBackupContent="@xml/backup_rules"
         android:icon="@drawable/ic_launcher"
         android:usesCleartextTraffic="false" android:label="Pocket Scribe"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/PocketScribe">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

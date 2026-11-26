@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var previewMessage: TextView
     private lateinit var timer: TextView
     private lateinit var recordingState: TextView
+    private lateinit var headerBadge: TextView
     private lateinit var backup: TextView
     private lateinit var action: Button
     private lateinit var audio: RadioButton
@@ -55,6 +56,7 @@ class MainActivity : ComponentActivity() {
     private var namingSession = ""
     private var restoredName = ""
     private var restoredSession = ""
+    private var themeAtCreate = ""
     private fun TextView.show(value: String) { if (text.toString() != value) text = value }
     private val refresh = object : Runnable {
         override fun run() {
@@ -90,21 +92,39 @@ class MainActivity : ComponentActivity() {
     private val recordingPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (canRecord()) begin() else toast("Allow microphone${if (selectedVideo) " and camera" else ""} access to record.")
     }
+    override fun attachBaseContext(newBase: android.content.Context) { super.attachBaseContext(SimpleUi.themed(newBase)) }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (!RecordingService.active) SegmentStore(this).recoverAbandoned()
         restoredName = savedInstanceState?.getString("nameText").orEmpty()
         restoredSession = savedInstanceState?.getString("nameSession").orEmpty()
         selectedVideo = if (RecordingService.active) RecordingService.isVideo else prefs.getBoolean("videoMode", true)
-        @Suppress("DEPRECATION")
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        SimpleUi.apply(this)
+        themeAtCreate = prefs.getString("theme", "system").orEmpty()
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(SimpleUi.PAPER) }
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom); insets
         }
-        val top = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
-        root.addView(top, LinearLayout.LayoutParams(-1, 0, 1f))
+        val bar = SimpleUi.header(this, "Pocket Scribe", back = false).apply {
+            setPadding(SimpleUi.dp(this@MainActivity, 20), 0, SimpleUi.dp(this@MainActivity, 16), 0)
+        }
+        headerBadge = SimpleUi.badge(this)
+        bar.addView(headerBadge, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = SimpleUi.dp(this@MainActivity, 10) })
+        val round = SimpleUi.dp(this, 40)
+        bar.addView(SimpleUi.roundButton(this, "i", "How it works") { SimpleUi.showInfo(this) },
+            LinearLayout.LayoutParams(round, round).apply { marginEnd = SimpleUi.dp(this@MainActivity, 8) })
+        bar.addView(SimpleUi.roundButton(this, "⚙", "Settings") { openSettings() }.apply {
+            typeface = Typeface.DEFAULT; textSize = 19f
+        }, LinearLayout.LayoutParams(round, round))
+        root.addView(bar, LinearLayout.LayoutParams(-1, SimpleUi.dp(this, 64)))
+        val top = FrameLayout(this).apply {
+            clipToOutline = true
+            background = SimpleUi.rounded(this@MainActivity, Color.BLACK, 22)
+        }
+        root.addView(top, LinearLayout.LayoutParams(-1, 0, 1f).apply {
+            val side = SimpleUi.dp(this@MainActivity, 16); setMargins(side, 0, side, 0)
+        })
         previewView = PreviewView(this).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             scaleType = PreviewView.ScaleType.FIT_CENTER
@@ -127,13 +147,13 @@ class MainActivity : ComponentActivity() {
             setPadding(SimpleUi.dp(this@MainActivity, 24), SimpleUi.dp(this@MainActivity, 12), SimpleUi.dp(this@MainActivity, 24), SimpleUi.dp(this@MainActivity, 12))
         }
         scroll.addView(bottom, FrameLayout.LayoutParams(-1, -1))
-        val modes = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        val modes = SimpleUi.segmentGroup(this)
         audio = RadioButton(this).apply { id = View.generateViewId(); text = "Audio only" }
         video = RadioButton(this).apply { id = View.generateViewId(); text = "Audio + video" }
         listOf(audio, video).forEach {
-            it.textSize = 16f; it.setTextColor(SimpleUi.INK); it.minHeight = SimpleUi.dp(this, 48)
-            it.buttonTintList = android.content.res.ColorStateList.valueOf(SimpleUi.INK)
-            modes.addView(it, RadioGroup.LayoutParams(0, -2, 1f))
+            it.textSize = 15f; it.minHeight = SimpleUi.dp(this, 44)
+            SimpleUi.segment(this, it)
+            modes.addView(it, RadioGroup.LayoutParams(0, SimpleUi.dp(this, 44), 1f))
         }
         bottom.addView(modes)
         modes.check(if (selectedVideo) video.id else audio.id)
@@ -141,11 +161,15 @@ class MainActivity : ComponentActivity() {
             selectedVideo = id == video.id; prefs.edit().putBoolean("videoMode", selectedVideo).apply()
             stopIdlePreview(); configurePreview(); render()
         }
-        timer = SimpleUi.text(this, "00:00", 38f).apply {
-            gravity = Gravity.CENTER; typeface = Typeface.create("monospace", Typeface.NORMAL)
+        timer = SimpleUi.text(this, "00:00", 44f, bold = true).apply {
+            gravity = Gravity.CENTER; typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+            fontFeatureSettings = "tnum"; setPadding(0, SimpleUi.dp(this@MainActivity, 10), 0, 0)
         }
         bottom.addView(timer)
-        recordingState = SimpleUi.text(this, "", 13f).apply { gravity = Gravity.CENTER; minHeight = SimpleUi.dp(this@MainActivity, 24) }
+        recordingState = SimpleUi.muted(this, "", 13f).apply {
+            gravity = Gravity.CENTER; minHeight = SimpleUi.dp(this@MainActivity, 24)
+            setPadding(0, 0, 0, SimpleUi.dp(this@MainActivity, 8))
+        }
         bottom.addView(recordingState)
         action = SimpleUi.primaryButton(this, "Start recording") {
             when {
@@ -153,15 +177,18 @@ class MainActivity : ComponentActivity() {
                 pendingName.isNotBlank() -> promptName(pendingName)
                 else -> requestStart()
             }
-        }.apply { background = SimpleUi.buttonBackground(this@MainActivity, SimpleUi.RED) }
-        bottom.addView(action, LinearLayout.LayoutParams(-1, SimpleUi.dp(this, 72)))
-        val links = LinearLayout(this).apply { gravity = Gravity.CENTER }
-        links.addView(SimpleUi.quietButton(this, "Google Drive") {
-            openSettings()
-        }, LinearLayout.LayoutParams(0, SimpleUi.dp(this, 56), 1.8f))
-        links.addView(SimpleUi.quietButton(this, "Settings") { openSettings() }, LinearLayout.LayoutParams(0, SimpleUi.dp(this, 56), 1f))
+        }
+        bottom.addView(action, LinearLayout.LayoutParams(-1, SimpleUi.dp(this, 68)))
+        val links = LinearLayout(this).apply { gravity = Gravity.CENTER; setPadding(0, SimpleUi.dp(this@MainActivity, 12), 0, 0) }
+        links.addView(SimpleUi.quietButton(this, "Recordings") {
+            startActivity(Intent(this, RecordingsActivity::class.java))
+        }, LinearLayout.LayoutParams(0, SimpleUi.dp(this, 48), 1f).apply { marginEnd = SimpleUi.dp(this@MainActivity, 10) })
+        links.addView(SimpleUi.quietButton(this, "Google Drive") { openSettings() }, LinearLayout.LayoutParams(0, SimpleUi.dp(this, 48), 1f))
         bottom.addView(links)
-        backup = SimpleUi.text(this, "", 13f).apply { gravity = Gravity.CENTER; minHeight = SimpleUi.dp(this@MainActivity, 20) }
+        backup = SimpleUi.muted(this, "", 13f).apply {
+            gravity = Gravity.CENTER; minHeight = SimpleUi.dp(this@MainActivity, 20)
+            setPadding(0, SimpleUi.dp(this@MainActivity, 10), 0, 0)
+        }
         bottom.addView(backup)
         setContentView(root); ViewCompat.requestApplyInsets(root)
     }
@@ -178,8 +205,15 @@ class MainActivity : ComponentActivity() {
         action.show(when { stopping -> "Finishing…"; preparing -> "Starting…"; active -> "Stop recording"; saving -> "Saving…"; pendingName.isNotBlank() -> "Name & save"; else -> "Start recording" })
         action.isEnabled = !stopping && !preparing && !saving
         audio.isEnabled = !active && pendingCommand.isEmpty(); video.isEnabled = audio.isEnabled
-        recordingState.show(when { stopping -> "Finishing recording"; preparing -> "Getting ready"; active -> "● Recording"; saving -> "Saving final copy"; pendingName.isNotBlank() -> "Recording needs a name"; else -> "" })
-        recordingState.setTextColor(if (active) SimpleUi.RED else SimpleUi.MUTED)
+        recordingState.show(when { stopping -> "Finishing recording"; preparing -> "Getting ready"; active -> "Recording. You can switch the screen off."; saving -> "Saving final copy"; pendingName.isNotBlank() -> "Recording needs a name"; else -> "" })
+        when {
+            active && !stopping -> SimpleUi.setBadge(headerBadge, "● REC", SimpleUi.RED_TEXT)
+            stopping || preparing || saving -> SimpleUi.setBadge(headerBadge, "WORKING", SimpleUi.INFO)
+            pendingName.isNotBlank() -> SimpleUi.setBadge(headerBadge, "YOUR TURN", SimpleUi.WARN)
+            prefs.getString("backupState", "") == "attention" -> SimpleUi.setBadge(headerBadge, "CHECK", SimpleUi.WARN)
+            finalSyncState == "ready" -> SimpleUi.setBadge(headerBadge, "SYNCING", SimpleUi.INFO)
+            else -> SimpleUi.setBadge(headerBadge, "READY", SimpleUi.PASS)
+        }
         val connected = !prefs.getString("account", "").isNullOrBlank()
         backup.show(when {
             !connected -> "Connect Drive to send recordings to Pocket Scribe Desktop"
@@ -288,7 +322,9 @@ class MainActivity : ComponentActivity() {
     private fun openSettings() { startActivity(Intent(this, SettingsActivity::class.java)) }
     private fun toast(value: String) { Toast.makeText(this, value, Toast.LENGTH_LONG).show() }
     override fun onResume() {
-        super.onResume(); visible = true
+        super.onResume()
+        if (prefs.getString("theme", "system").orEmpty() != themeAtCreate) { recreate(); return }
+        SimpleUi.apply(this); visible = true
         intent.getStringExtra("nameSession")?.let { lastPrompted = ""; intent.removeExtra("nameSession"); promptName(it) }
         main.removeCallbacks(refresh); refresh.run()
     }
@@ -306,13 +342,13 @@ class MainActivity : ComponentActivity() {
 
 private class AudioPanel(context: android.content.Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    init { contentDescription = "Audio level"; setBackgroundColor(Color.rgb(24, 31, 35)) }
+    init { contentDescription = "Audio level"; setBackgroundColor(Color.rgb(28, 33, 41)) }
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val density = resources.displayMetrics.density
         val active = RecordingService.active && !RecordingService.isVideo
         val level = if (active) (RecordingService.audioLevel / 32767f).coerceIn(0f, 1f) else 0f
-        paint.color = if (active) Color.rgb(233, 89, 90) else Color.rgb(127, 141, 148)
+        paint.color = if (active) Color.rgb(239, 106, 93) else Color.rgb(139, 150, 168)
         val bar = 8 * density; val gap = 8 * density
         for (i in 0..6) {
             val height = (12 + level * (1f - kotlin.math.abs(i - 3) / 5f) * 100) * density

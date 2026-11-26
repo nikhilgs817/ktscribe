@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark: matches the Pocket Scribe Desktop dark tokens. -->
+    <style name="PocketScribe" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">#1C2129</item>
+        <item name="android:colorPrimaryDark">#1C2129</item>
+        <item name="android:colorAccent">#EF6A5D</item>
+        <item name="android:windowBackground">@color/paper</item>
+        <item name="android:textColorPrimary">#EEF2F8</item>
+    </style>
+    <color name="paper">#1C2129</color>
+</resources>
